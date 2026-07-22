@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "MPLD — Manipulador de Texto & Rede",
+  "version": "2.0.0",
+  "description": "Manipulador de textos DOM em tempo real e interceptador de requisições de rede (XHR/Fetch/WebSocket & MITM Proxy)",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "proxy"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "service-worker-loader.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "assets/index.ts-Btwc1RIT.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "resources": [
+        "src/interceptor/index.ts",
+        "assets/index.ts-Btwc1RIT.js"
+      ],
+      "use_dynamic_url": false
+    }
+  ]
+}
