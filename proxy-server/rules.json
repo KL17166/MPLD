@@ -1,0 +1,92 @@
+[
+  {
+    "id": "mm9b9axm1s29m",
+    "name": "valor total",
+    "find": "713,66",
+    "replace": "728,90",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mm9bahi9dcldc",
+    "name": "dsdf",
+    "find": "693,84",
+    "replace": "1.585,92",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mm9bb0v1gqop3",
+    "name": "Regra Proxy",
+    "find": "381,61",
+    "replace": "872,26",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mm9bbo3losgqv",
+    "name": "fewdsh",
+    "find": "312,23",
+    "replace": "728,90",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mm9bvdmgjhub8",
+    "name": "oiuyt",
+    "find": "312,23",
+    "replace": "728,90",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mmf6agrxrjpjf",
+    "name": "Regra Proxy",
+    "find": "81,96",
+    "replace": "101,96",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mmf6aoprdwv3e",
+    "name": "Regra Proxy",
+    "find": "91,96",
+    "replace": "101,96",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mmf6b2ypdg5pt",
+    "name": "Popup: 81,96",
+    "find": "81,96",
+    "replace": "101,96",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  },
+  {
+    "id": "mmf6bazu906g0",
+    "name": "91,96",
+    "find": "91,96",
+    "replace": "101,96",
+    "urlFilter": "",
+    "useRegex": false,
+    "caseSensitive": false,
+    "enabled": true
+  }
+]

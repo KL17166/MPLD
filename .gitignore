@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+proxy-server/certs/*.pem
+proxy-server/certs/*.key
+proxy-server/certs/*.crt

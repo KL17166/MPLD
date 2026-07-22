@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Text Manipulator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <div class="popup-container">
+
+    <!-- ─── HEADER ─── -->
+    <header class="popup-header">
+      <div class="logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <rect x="2" y="3" width="20" height="18" rx="3" stroke="url(#g1)" stroke-width="2" />
+          <path d="M7 8h10M7 12h7M7 16h4" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" />
+          <defs>
+            <linearGradient id="g1" x1="2" y1="3" x2="22" y2="21">
+              <stop stop-color="#a855f7" />
+              <stop offset="1" stop-color="#06b6d4" />
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <div class="header-text">
+        <h1>Text Manipulator</h1>
+        <div id="pageHost" class="page-host">carregando...</div>
+      </div>
+      <div class="header-badges">
+        <span id="proxyBadge" class="popup-proxy-badge hidden" title="Proxy MITM ativo">🛡️</span>
+        <span id="vipBadge" class="popup-vip-badge hidden">👑 VIP</span>
+      </div>
+    </header>
+
+    <!-- ─── STATUS STRIP ─── -->
+    <div class="status-strip">
+      <div class="strip-stat" title="Regras ativas para esta página">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <span id="rulesCount">0 regras</span>
+      </div>
+      <div class="strip-stat" title="Total de substituições acumuladas">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        <span id="totalReplacements">0 subst.</span>
+      </div>
+      <div class="strip-right">
+        <label class="mini-toggle" title="Modo VIP — intercepta XHR/Fetch">
+          <input type="checkbox" id="vipQuickToggle">
+          <span class="mini-slider mini-slider-vip"></span>
+        </label>
+        <span class="mini-toggle-label mini-label-vip">VIP</span>
+        <label class="mini-toggle" title="Aplicação automática ao carregar páginas">
+          <input type="checkbox" id="autoApplyQuick">
+          <span class="mini-slider"></span>
+        </label>
+        <span class="mini-toggle-label">Auto</span>
+      </div>
+    </div>
+
+    <!-- ─── BUSCAR + SUBSTITUIR ─── -->
+    <div class="form-group">
+      <label for="findInput">
+        Buscar
+        <span id="matchBadge" class="match-badge hidden">0 resultados</span>
+      </label>
+      <div class="input-wrap">
+        <input type="text" id="findInput" placeholder="Texto para encontrar..." autocomplete="off" spellcheck="false">
+        <button id="btnPreview" class="input-action-btn" title="Contar ocorrências na página">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="replaceInput">Substituir por</label>
+      <div class="input-wrap">
+        <input type="text" id="replaceInput" placeholder="Novo texto (deixe vazio para remover)..." autocomplete="off" spellcheck="false">
+        <button id="btnSaveRule" class="input-action-btn" title="Salvar como regra permanente no Painel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13"/><polyline points="7,3 7,8 15,8"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ─── OPÇÕES ─── -->
+    <div class="options-row">
+      <label class="toggle-option" title="Usar Expressão Regular no campo Buscar">
+        <input type="checkbox" id="useRegex">
+        <span class="toggle-label">Regex</span>
+      </label>
+      <label class="toggle-option" title="Diferenciar maiúsculas de minúsculas">
+        <input type="checkbox" id="caseSensitive">
+        <span class="toggle-label">Aa</span>
+      </label>
+      <label class="toggle-option" title="Substituir todas as ocorrências (não apenas a primeira)">
+        <input type="checkbox" id="replaceAll" checked>
+        <span class="toggle-label">Todas</span>
+      </label>
+    </div>
+
+    <!-- ─── AÇÕES PRINCIPAIS ─── -->
+    <div class="actions">
+      <button id="btnReplace" class="btn btn-primary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        Substituir
+      </button>
+      <button id="btnUndo" class="btn btn-ghost-sm" title="Desfazer — recarrega a aba para reverter">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 105.17-8.89L1 10"/></svg>
+      </button>
+      <button id="btnPanel" class="btn btn-secondary" title="Abrir Painel Completo com todas as configurações">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        Painel
+      </button>
+    </div>
+
+    <!-- ─── STATUS BAR ─── -->
+    <div id="statusBar" class="status-bar hidden">
+      <span id="statusText"></span>
+    </div>
+
+    <!-- ─── REGRAS ATIVAS ─── -->
+    <div id="activeRulesSection" class="active-rules-section hidden">
+      <div class="active-rules-header">
+        <span>Regras ativas nesta página</span>
+      </div>
+      <div id="activeRulesList" class="active-rules-list"></div>
+    </div>
+
+    <!-- ─── HISTÓRICO RECENTE ─── -->
+    <div id="historySection" class="history-section hidden">
+      <div class="history-header">
+        <span>Recentes</span>
+        <button id="btnClearHistory" class="history-clear-btn">limpar</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </div>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
