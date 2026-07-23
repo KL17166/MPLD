@@ -131,10 +131,16 @@ export const PanelApp: React.FC = () => {
     checkProxyServerStatus();
     checkChromeProxyStatus();
 
-    if (typeof chrome !== 'undefined' && chrome.storage) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
       const storageListener = (changes: { [key: string]: chrome.storage.StorageChange }, area: string) => {
-        if (area === 'local' && changes.rules) {
-          setRules(changes.rules.newValue || []);
+        if (area === 'local') {
+          if (changes.rules) setRules(changes.rules.newValue || []);
+          if (changes.vipActive !== undefined) setVipActive(!!changes.vipActive.newValue);
+          if (changes.highlightActive !== undefined) {
+            setSettings((prev) => ({ ...prev, highlightActive: !!changes.highlightActive.newValue }));
+          }
+          if (changes.proxyConfig) setProxyConfig(changes.proxyConfig.newValue);
+          if (changes.stats) setStats(changes.stats.newValue || {});
         }
       };
       chrome.storage.onChanged.addListener(storageListener);
@@ -361,6 +367,9 @@ export const PanelApp: React.FC = () => {
 
   const saveRulesToStorage = (updatedRules: Rule[]) => {
     setRules(updatedRules);
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ rules: updatedRules });
+    }
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       chrome.runtime.sendMessage({ action: 'saveRules', rules: updatedRules });
     }
@@ -369,6 +378,9 @@ export const PanelApp: React.FC = () => {
   const saveSettingsToStorage = (newSettings: Partial<ExtensionSettings>) => {
     const updated = { ...settings, ...newSettings };
     setSettings(updated);
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set(newSettings);
+    }
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       chrome.runtime.sendMessage({ action: 'saveSettings', settings: newSettings });
     }
@@ -466,6 +478,9 @@ export const PanelApp: React.FC = () => {
     const nextState = !vipActive;
     setVipActive(nextState);
     saveSettingsToStorage({ vipActive: nextState });
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ vipActive: nextState });
+    }
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       chrome.runtime.sendMessage({ action: 'setVipStatus', vipActive: nextState });
     }
