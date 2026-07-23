@@ -52,21 +52,12 @@ export const PopupApp: React.FC = () => {
         }
       });
 
-      // Load initial rules & states
-      chrome.runtime.sendMessage({ action: 'getRules' }, (res) => {
-        if (res && res.rules) setRules(res.rules);
-      });
-
-      chrome.runtime.sendMessage({ action: 'getVipStatus' }, (res) => {
-        if (res) setVipActive(!!res.vipActive);
-      });
-
-      chrome.runtime.sendMessage({ action: 'getHighlightStatus' }, (res) => {
-        if (res) setHighlightActive(!!res.highlightActive);
-      });
-
-      chrome.storage.local.get(['popupHistory'], (data) => {
-        if (data.popupHistory) setHistory(data.popupHistory);
+      // Load initial rules & states directly from chrome.storage.local for instant reliability
+      chrome.storage.local.get(['rules', 'vipActive', 'highlightActive', 'popupHistory'], (data) => {
+        if (data && data.rules) setRules(data.rules);
+        if (data && data.vipActive !== undefined) setVipActive(!!data.vipActive);
+        if (data && data.highlightActive !== undefined) setHighlightActive(!!data.highlightActive);
+        if (data && data.popupHistory) setHistory(data.popupHistory);
       });
 
       // Sync storage changes to state in real time

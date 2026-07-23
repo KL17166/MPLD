@@ -143,41 +143,30 @@ export const PanelApp: React.FC = () => {
   }, []);
 
   const loadAllData = () => {
-    if (typeof chrome !== 'undefined' && chrome.storage) {
-      chrome.runtime.sendMessage({ action: 'getRules' }, (res) => {
-        if (res && res.rules) setRules(res.rules);
-      });
-
-      chrome.runtime.sendMessage({ action: 'getVipStatus' }, (res) => {
-        if (res) setVipActive(!!res.vipActive);
-      });
-
-      chrome.runtime.sendMessage({ action: 'getStats' }, (res) => {
-        if (res && res.stats) setStats(res.stats);
-      });
-
-      chrome.runtime.sendMessage({ action: 'getProxyConfig' }, (res) => {
-        if (res && res.config) {
-          setProxyConfig(res.config);
-          setProxyHostInput(res.config.host || '127.0.0.1');
-          setProxyPortInput(res.config.port || 8080);
-          setProxyModeInput(res.config.mode || 'fixed_servers');
-          setProxyBypassInput((res.config.bypassList || ['localhost', '127.0.0.1', '<local>']).join(', '));
-        }
-      });
-
-      chrome.runtime.sendMessage({ action: 'getSettings' }, (res) => {
-        if (res) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(
+        ['rules', 'vipActive', 'stats', 'proxyConfig', 'autoApply', 'watchChanges', 'continuousMode', 'pollingInterval', 'highlightActive'],
+        (data) => {
+          if (data && data.rules) setRules(data.rules);
+          if (data && data.vipActive !== undefined) setVipActive(!!data.vipActive);
+          if (data && data.stats) setStats(data.stats);
+          if (data && data.proxyConfig) {
+            setProxyConfig(data.proxyConfig);
+            setProxyHostInput(data.proxyConfig.host || '127.0.0.1');
+            setProxyPortInput(data.proxyConfig.port || 8080);
+            setProxyModeInput(data.proxyConfig.mode || 'fixed_servers');
+            setProxyBypassInput((data.proxyConfig.bypassList || ['localhost', '127.0.0.1', '<local>']).join(', '));
+          }
           setSettings({
-            autoApply: !!res.autoApply,
-            watchChanges: res.watchChanges !== false,
-            continuousMode: !!res.continuousMode,
-            pollingInterval: res.pollingInterval || 500,
-            vipActive: !!res.vipActive,
-            highlightActive: !!res.highlightActive
+            autoApply: !!data?.autoApply,
+            watchChanges: data?.watchChanges !== false,
+            continuousMode: !!data?.continuousMode,
+            pollingInterval: data?.pollingInterval || 500,
+            vipActive: !!data?.vipActive,
+            highlightActive: !!data?.highlightActive
           });
         }
-      });
+      );
     }
   };
 

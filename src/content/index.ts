@@ -352,19 +352,17 @@ import { Rule } from '../types';
   }
 
   function fetchAndApplyRules() {
-    chrome.runtime.sendMessage({ action: 'getRules' }, (response) => {
-      if (response && Array.isArray(response.rules)) {
-        activeRules = response.rules.filter((r: Rule) => r.enabled);
+    chrome.storage.local.get(['rules', 'vipActive', 'highlightActive'], (data) => {
+      if (data && Array.isArray(data.rules)) {
+        activeRules = data.rules.filter((r: Rule) => r.enabled);
         applyRules(activeRules, true);
       }
-    });
-
-    chrome.runtime.sendMessage({ action: 'getVipStatus' }, (res) => {
-      if (res) syncVipRules(activeRules, !!res.vipActive);
-    });
-
-    chrome.runtime.sendMessage({ action: 'getHighlightStatus' }, (res) => {
-      if (res) isHighlightActive = !!res.highlightActive;
+      if (data && data.vipActive !== undefined) {
+        syncVipRules(activeRules, !!data.vipActive);
+      }
+      if (data && data.highlightActive !== undefined) {
+        isHighlightActive = !!data.highlightActive;
+      }
     });
   }
 
@@ -466,6 +464,25 @@ import { Rule } from '../types';
       return true;
     }
   });
+
+  // Listen for direct storage changes
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local') {
+        if (changes.rules) {
+          activeRules = (changes.rules.newValue || []).filter((r: Rule) => r.enabled);
+          applyRules(activeRules, true);
+        }
+        if (changes.vipActive) {
+          syncVipRules(activeRules, !!changes.vipActive.newValue);
+        }
+        if (changes.highlightActive) {
+          isHighlightActive = !!changes.highlightActive.newValue;
+          if (!isHighlightActive) clearHighlights();
+        }
+      }
+    });
+  }
 
   // Init Main World interceptor & fetch rules
   injectMainWorldInterceptor();
