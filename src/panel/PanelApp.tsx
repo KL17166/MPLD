@@ -86,6 +86,18 @@ export const PanelApp: React.FC = () => {
   const [chromeProxyActive, setChromeProxyActive] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Proxy Config Inputs State
+  const [proxyHostInput, setProxyHostInput] = useState<string>('127.0.0.1');
+  const [proxyPortInput, setProxyPortInput] = useState<number>(8080);
+  const [proxyDashboardPortInput, setProxyDashboardPortInput] = useState<number>(8888);
+  const [proxyModeInput, setProxyModeInput] = useState<'fixed_servers' | 'direct' | 'system'>('fixed_servers');
+  const [proxyBypassInput, setProxyBypassInput] = useState<string>('localhost, 127.0.0.1, <local>');
+
+  // VIP Simulator Tool State
+  const [vipTestPayload, setVipTestPayload] = useState<string>('{\n  "account": "12345-6",\n  "saldo": "R$ 10.000,00"\n}');
+  const [vipTestResult, setVipTestResult] = useState<string | null>(null);
+  const [vipTestMatchesCount, setVipTestMatchesCount] = useState<number>(0);
+
   // Modal State for Rule Editing/Creation
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
@@ -132,7 +144,13 @@ export const PanelApp: React.FC = () => {
       });
 
       chrome.runtime.sendMessage({ action: 'getProxyConfig' }, (res) => {
-        if (res && res.config) setProxyConfig(res.config);
+        if (res && res.config) {
+          setProxyConfig(res.config);
+          setProxyHostInput(res.config.host || '127.0.0.1');
+          setProxyPortInput(res.config.port || 8080);
+          setProxyModeInput(res.config.mode || 'fixed_servers');
+          setProxyBypassInput((res.config.bypassList || ['localhost', '127.0.0.1', '<local>']).join(', '));
+        }
       });
 
       chrome.runtime.sendMessage({ action: 'getSettings' }, (res) => {
@@ -160,7 +178,7 @@ export const PanelApp: React.FC = () => {
 
   const checkProxyServerStatus = async () => {
     try {
-      const res = await fetch('http://localhost:8888/status', { method: 'GET' });
+      const res = await fetch('http://localhost:8888/api/info', { method: 'GET' });
       if (res.ok) {
         setProxyServerOnline(true);
         fetchProxyServerRules();
@@ -175,7 +193,7 @@ export const PanelApp: React.FC = () => {
 
   const fetchProxyServerRules = async () => {
     try {
-      const res = await fetch('http://localhost:8888/rules');
+      const res = await fetch('http://localhost:8888/api/rules');
       if (res.ok) {
         const data = await res.json();
         setProxyServerRules(data);
@@ -208,6 +226,16 @@ export const PanelApp: React.FC = () => {
     }
   };
 
+  const checkRegexError = (pattern: string, caseSensitive: boolean): string | null => {
+    if (!pattern) return null;
+    try {
+      new RegExp(pattern, caseSensitive ? 'g' : 'gi');
+      return null;
+    } catch (err) {
+      return (err as Error).message;
+    }
+  };
+
   const handleAddUltraServerRule = async () => {
     const find = prompt('Texto ou Regex para buscar na resposta da API:');
     if (!find) return;
@@ -215,7 +243,7 @@ export const PanelApp: React.FC = () => {
     const name = prompt('Nome descritivo da regra:', 'Regra Proxy Server') || 'Regra Proxy Server';
 
     try {
-      const res = await fetch('http://localhost:8888/rules', {
+      const res = await fetch('http://localhost:8888/api/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, find, replace, enabled: true })
@@ -233,7 +261,7 @@ export const PanelApp: React.FC = () => {
 
   const handleToggleUltraServerRule = async (id: string, enabled: boolean) => {
     try {
-      await fetch(`http://localhost:8888/rules/${id}`, {
+      await fetch(`http://localhost:8888/api/rules/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled })
@@ -247,12 +275,102 @@ export const PanelApp: React.FC = () => {
   const handleDeleteUltraServerRule = async (id: string) => {
     if (!confirm('Excluir esta regra do servidor Proxy?')) return;
     try {
-      await fetch(`http://localhost:8888/rules/${id}`, { method: 'DELETE' });
+      await fetch(`http://localhost:8888/api/rules/${id}`, { method: 'DELETE' });
       fetchProxyServerRules();
       showStatus('Regra removida do servidor Proxy.', 'info');
     } catch {
       // Ignored
     }
+  };
+
+  const handleSyncRulesToProxyServer = async () => {
+    const ultraRules = rules.filter((r) => r.mode === 'ultra' || r.enabled);
+    if (ultraRules.length === 0) {
+      showStatus('Nenhuma regra disponível para enviar ao Proxy.', 'info');
+      return;
+    }
+    let successCount = 0;
+    for (const r of ultraRules) {
+      try {
+        const res = await fetch('http://localhost:8888/api/rules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: r.name || r.find,
+            find: r.find,
+            replace: r.replace,
+            urlFilter: r.urlFilter || '',
+            useRegex: r.useRegex,
+            caseSensitive: r.caseSensitive,
+            enabled: r.enabled
+          })
+        });
+        if (res.ok) successCount++;
+      } catch {
+        // Ignored
+      }
+    }
+    fetchProxyServerRules();
+    showStatus(`${successCount} regra(s) sincronizada(s) com o servidor Proxy Node.js!`, 'success');
+  };
+
+  const handleSaveProxyConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated: ProxyConfig = {
+      enabled: proxyConfig.enabled,
+      host: proxyHostInput,
+      port: Number(proxyPortInput) || 8080,
+      mode: proxyModeInput,
+      bypassList: proxyBypassInput.split(',').map((s) => s.trim()).filter(Boolean)
+    };
+    setProxyConfig(updated);
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      chrome.runtime.sendMessage({ action: 'setProxyConfig', config: updated }, () => {
+        showStatus('Configurações do proxy salvas com sucesso!', 'success');
+      });
+    }
+  };
+
+  const handleRunVipTest = () => {
+    if (!vipTestPayload) {
+      setVipTestResult(null);
+      setVipTestMatchesCount(0);
+      return;
+    }
+    let result = vipTestPayload;
+    let matchesCount = 0;
+    const activeVipRules = rules.filter((r) => r.mode === 'vip' || (vipActive && r.enabled));
+    for (const r of activeVipRules) {
+      if (!r.find || !r.enabled) continue;
+      const flags = r.caseSensitive ? 'g' : 'gi';
+      let pattern: RegExp;
+      if (r.useRegex) {
+        try {
+          pattern = new RegExp(r.find, flags);
+        } catch {
+          continue;
+        }
+      } else {
+        pattern = new RegExp(r.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+      }
+      const m = result.match(pattern);
+      if (m) {
+        matchesCount += m.length;
+        result = result.replace(pattern, r.replace ?? '');
+      }
+    }
+    setVipTestResult(result);
+    setVipTestMatchesCount(matchesCount);
+  };
+
+  const handleClearSingleRuleStat = (ruleId: string) => {
+    const updatedStats = { ...stats };
+    delete updatedStats[ruleId];
+    setStats(updatedStats);
+    if (typeof chrome !== 'undefined' && chrome.storage) {
+      chrome.storage.local.set({ stats: updatedStats });
+    }
+    showStatus('Estatística da regra zerada.', 'info');
   };
 
   const saveRulesToStorage = (updatedRules: Rule[]) => {
@@ -868,6 +986,56 @@ export const PanelApp: React.FC = () => {
                 </div>
               </div>
 
+              {/* VIP Playground & Payload Tester */}
+              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <h4 className="font-bold text-sm text-white flex items-center space-x-2">
+                    <Terminal className="w-4 h-4 text-amber-400" />
+                    <span>Testador & Simulador de Payload API (JSON / XHR)</span>
+                  </h4>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {rules.filter((r) => r.mode === 'vip' || (vipActive && r.enabled)).length} regra(s) aplicável(is)
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 text-xs">
+                  <div className="space-y-2">
+                    <label className="block text-slate-400 font-semibold">Payload Recebido da API (Entrada):</label>
+                    <textarea
+                      rows={5}
+                      value={vipTestPayload}
+                      onChange={(e) => setVipTestPayload(e.target.value)}
+                      placeholder='Ex: {"saldo": "R$ 5.000,00", "status": "Ativo"}'
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-slate-200 focus:outline-none focus:border-amber-500/80"
+                    />
+                    <button
+                      onClick={handleRunVipTest}
+                      className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg transition-all flex items-center justify-center space-x-2"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Simular Interceptação VIP</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-slate-400 font-semibold">Payload Processado (Saída p/ Página):</label>
+                      {vipTestResult !== null && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800/60">
+                          {vipTestMatchesCount} substituição(ões)
+                        </span>
+                      )}
+                    </div>
+                    <textarea
+                      readOnly
+                      rows={5}
+                      value={vipTestResult ?? 'Clique em "Simular Interceptação VIP" para ver o resultado...'}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-emerald-400 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* VIP Rules Table */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -906,54 +1074,67 @@ export const PanelApp: React.FC = () => {
                       ) : (
                         rules
                           .filter((r) => r.mode === 'vip' || (vipActive && r.enabled))
-                          .map((rule) => (
-                            <tr key={rule.id} className="hover:bg-slate-800/30 transition-colors">
-                              <td className="py-3 px-4 font-sans">
-                                <button
-                                  onClick={() => handleToggleRule(rule.id)}
-                                  className={`w-8 h-4 flex items-center rounded-full p-0.5 transition-colors ${
-                                    rule.enabled ? 'bg-amber-500 justify-end' : 'bg-slate-700 justify-start'
-                                  }`}
-                                >
-                                  <span className="w-3 h-3 rounded-full bg-slate-950 shadow-sm" />
-                                </button>
-                              </td>
-                              <td className="py-3 px-4 font-sans font-medium text-slate-200">
-                                {rule.name || 'Sem nome'}
-                              </td>
-                              <td className="py-3 px-4 text-amber-400 font-semibold">
-                                {rule.find}
-                              </td>
-                              <td className="py-3 px-4 text-slate-300">
-                                {rule.replace || <span className="text-slate-600 font-sans italic">(remover)</span>}
-                              </td>
-                              <td className="py-3 px-4 text-slate-400 font-sans">
-                                {rule.urlFilter ? (
-                                  <span className="bg-amber-950/60 text-amber-300 font-mono text-[10px] px-1.5 py-0.5 rounded border border-amber-800/40">
-                                    {rule.urlFilter}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-600">Todas APIs</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-4 text-right font-sans">
-                                <div className="flex items-center justify-end space-x-2">
+                          .map((rule) => {
+                            const regexErr = rule.useRegex ? checkRegexError(rule.find, rule.caseSensitive) : null;
+                            return (
+                              <tr key={rule.id} className="hover:bg-slate-800/30 transition-colors">
+                                <td className="py-3 px-4 font-sans">
                                   <button
-                                    onClick={() => handleOpenEditModal(rule)}
-                                    className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                                    onClick={() => handleToggleRule(rule.id)}
+                                    className={`w-8 h-4 flex items-center rounded-full p-0.5 transition-colors ${
+                                      rule.enabled ? 'bg-amber-500 justify-end' : 'bg-slate-700 justify-start'
+                                    }`}
                                   >
-                                    <Edit2 className="w-3.5 h-3.5" />
+                                    <span className="w-3 h-3 rounded-full bg-slate-950 shadow-sm" />
                                   </button>
-                                  <button
-                                    onClick={() => handleDeleteRule(rule.id)}
-                                    className="p-1.5 hover:bg-rose-950/60 rounded text-slate-400 hover:text-rose-400 transition-colors"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))
+                                </td>
+                                <td className="py-3 px-4 font-sans font-medium text-slate-200">
+                                  {rule.name || 'Sem nome'}
+                                </td>
+                                <td className="py-3 px-4 text-amber-400 font-semibold">
+                                  <div className="flex items-center space-x-1.5">
+                                    <span>{rule.find}</span>
+                                    {regexErr && (
+                                      <span
+                                        className="bg-rose-950 text-rose-400 text-[10px] px-1.5 py-0.2 rounded border border-rose-800"
+                                        title={`Regex Inválido: ${regexErr}`}
+                                      >
+                                        Erro Regex
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 text-slate-300">
+                                  {rule.replace || <span className="text-slate-600 font-sans italic">(remover)</span>}
+                                </td>
+                                <td className="py-3 px-4 text-slate-400 font-sans">
+                                  {rule.urlFilter ? (
+                                    <span className="bg-amber-950/60 text-amber-300 font-mono text-[10px] px-1.5 py-0.5 rounded border border-amber-800/40">
+                                      {rule.urlFilter}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-600">Todas APIs</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 text-right font-sans">
+                                  <div className="flex items-center justify-end space-x-2">
+                                    <button
+                                      onClick={() => handleOpenEditModal(rule)}
+                                      className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                                    >
+                                      <Edit2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteRule(rule.id)}
+                                      className="p-1.5 hover:bg-rose-950/60 rounded text-slate-400 hover:text-rose-400 transition-colors"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
                       )}
                     </tbody>
                   </table>
@@ -984,7 +1165,7 @@ export const PanelApp: React.FC = () => {
                           <span>{proxyServerOnline ? 'SERVIDOR ONLINE' : 'SERVIDOR OFFLINE'}</span>
                         </span>
                       </div>
-                      <p className="text-xs text-slate-400">Redireciona o tráfego TCP/HTTP/HTTPS via servidor Node.js local (porta 8080/8888)</p>
+                      <p className="text-xs text-slate-400">Redireciona o tráfego TCP/HTTP/HTTPS via servidor Node.js local (porta {proxyPortInput}/{proxyDashboardPortInput})</p>
                     </div>
                   </div>
 
@@ -1003,25 +1184,79 @@ export const PanelApp: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Quick Info & Actions Grid */}
-                <div className="grid grid-cols-4 gap-4 text-xs">
-                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                    <span className="text-slate-500 font-sans block text-[10px]">Host Local</span>
-                    <span className="text-indigo-400 font-mono font-semibold">127.0.0.1</span>
+                {/* Editable Proxy Form Configuration Card */}
+                <form onSubmit={handleSaveProxyConfig} className="bg-slate-950 p-4 rounded-xl border border-slate-800/80 space-y-4">
+                  <h4 className="font-bold text-xs text-slate-300 uppercase tracking-wider flex items-center space-x-2">
+                    <Settings className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Configuração do Servidor Proxy & Chrome Settings</span>
+                  </h4>
+
+                  <div className="grid grid-cols-4 gap-4 text-xs">
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1">Host Local</label>
+                      <input
+                        type="text"
+                        value={proxyHostInput}
+                        onChange={(e) => setProxyHostInput(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-indigo-400 font-mono font-semibold focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1">Porta Proxy MITM</label>
+                      <input
+                        type="number"
+                        value={proxyPortInput}
+                        onChange={(e) => setProxyPortInput(Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-indigo-400 font-mono font-semibold focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1">Porta API Backend</label>
+                      <input
+                        type="number"
+                        value={proxyDashboardPortInput}
+                        onChange={(e) => setProxyDashboardPortInput(Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-indigo-400 font-mono font-semibold focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1">Modo Proxy</label>
+                      <select
+                        value={proxyModeInput}
+                        onChange={(e) => setProxyModeInput(e.target.value as any)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="fixed_servers">Servidor Fixo (fixed_servers)</option>
+                        <option value="direct">Conexão Direta (direct)</option>
+                        <option value="system">Usar do Sistema (system)</option>
+                      </select>
+                    </div>
                   </div>
-                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                    <span className="text-slate-500 font-sans block text-[10px]">Porta Proxy MITM</span>
-                    <span className="text-indigo-400 font-mono font-semibold">8080</span>
+
+                  <div>
+                    <label className="block text-slate-400 font-semibold mb-1 text-xs">Lista de Exceções / Bypass (separadas por vírgula)</label>
+                    <input
+                      type="text"
+                      value={proxyBypassInput}
+                      onChange={(e) => setProxyBypassInput(e.target.value)}
+                      placeholder="localhost, 127.0.0.1, <local>"
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-300 font-mono text-xs focus:outline-none focus:border-indigo-500"
+                    />
                   </div>
-                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                    <span className="text-slate-500 font-sans block text-[10px]">Porta Dashboard API</span>
-                    <span className="text-indigo-400 font-mono font-semibold">8888</span>
+
+                  <div className="flex items-center justify-end pt-1">
+                    <button
+                      type="submit"
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-950 flex items-center space-x-1.5"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Salvar Configuração do Proxy</span>
+                    </button>
                   </div>
-                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                    <span className="text-slate-500 font-sans block text-[10px]">Regras do Backend</span>
-                    <span className="text-indigo-400 font-mono font-semibold">{proxyServerRules.length}</span>
-                  </div>
-                </div>
+                </form>
 
                 <div className="flex items-center space-x-3 pt-2">
                   <a
@@ -1048,6 +1283,14 @@ export const PanelApp: React.FC = () => {
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                     <span>Verificar Conexão</span>
+                  </button>
+
+                  <button
+                    onClick={handleSyncRulesToProxyServer}
+                    className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-indigo-300 border border-indigo-500/30 transition-colors"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Sincronizar Regras p/ Node</span>
                   </button>
 
                   <button
@@ -1133,7 +1376,17 @@ export const PanelApp: React.FC = () => {
                     <Activity className="w-4 h-4 text-indigo-400" />
                     <span>Log de Requisições em Tempo Real (WebSocket)</span>
                   </h4>
-                  <span className="text-[11px] text-slate-500 font-mono">ws://localhost:8888</span>
+                  <div className="flex items-center space-x-3">
+                    {logs.length > 0 && (
+                      <button
+                        onClick={() => setLogs([])}
+                        className="text-[10px] text-slate-400 hover:text-rose-400 transition-colors"
+                      >
+                        Limpar logs
+                      </button>
+                    )}
+                    <span className="text-[11px] text-slate-500 font-mono">ws://localhost:8888</span>
+                  </div>
                 </div>
 
                 <div className="bg-slate-950 rounded-xl p-3 font-mono text-[11px] h-48 overflow-y-auto space-y-1 border border-slate-800/80">
@@ -1180,8 +1433,8 @@ export const PanelApp: React.FC = () => {
                     <ol className="list-decimal list-inside space-y-1 text-slate-400">
                       <li>Conecte o celular na mesma rede Wi-Fi do computador.</li>
                       <li>Vá em Wi-Fi → Editar Rede → Proxy Manual.</li>
-                      <li>Host: IP do seu PC, Porta: <code className="text-emerald-300 font-mono">8080</code>.</li>
-                      <li>Acesse <code className="text-emerald-300 font-mono">http://[IP_DO_PC]:8888/cert</code> e baixe o certificado CA.</li>
+                      <li>Host: IP do seu PC, Porta: <code className="text-emerald-300 font-mono">{proxyPortInput}</code>.</li>
+                      <li>Acesse <code className="text-emerald-300 font-mono">http://[IP_DO_PC]:{proxyDashboardPortInput}/cert</code> e baixe o certificado CA.</li>
                       <li>Instale o certificado em Configurações → Segurança → Certificados.</li>
                     </ol>
                   </div>
@@ -1192,8 +1445,8 @@ export const PanelApp: React.FC = () => {
                       <span>iOS (iPhone / iPad)</span>
                     </span>
                     <ol className="list-decimal list-inside space-y-1 text-slate-400">
-                      <li>Editar Wi-Fi → Proxy Manual → Configure o IP do PC e Porta 8080.</li>
-                      <li>Abra o Safari e acesse <code className="text-indigo-300 font-mono">http://[IP_DO_PC]:8888/cert</code>.</li>
+                      <li>Editar Wi-Fi → Proxy Manual → Configure o IP do PC e Porta {proxyPortInput}.</li>
+                      <li>Abra o Safari e acesse <code className="text-indigo-300 font-mono">http://[IP_DO_PC]:{proxyDashboardPortInput}/cert</code>.</li>
                       <li>Baixe o perfil de configuração e abra Ajustes → Perfil Baixado.</li>
                       <li>Ajustes → Geral → Sobre → Confiança em Certificados → Ativar chave.</li>
                     </ol>
@@ -1240,7 +1493,7 @@ export const PanelApp: React.FC = () => {
           {/* SECTION: STATS */}
           {activeSection === 'stats' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl space-y-1">
                   <span className="text-xs text-slate-400 font-medium">Total de Substituições</span>
                   <div className="text-3xl font-bold text-emerald-400">{totalReplacementsCount}</div>
@@ -1255,48 +1508,91 @@ export const PanelApp: React.FC = () => {
                     {rules.filter((r) => r.enabled).length}
                   </div>
                 </div>
+                <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl space-y-1">
+                  <span className="text-xs text-slate-400 font-medium">Regras Executadas</span>
+                  <div className="text-3xl font-bold text-indigo-400">
+                    {Object.keys(stats).length}
+                  </div>
+                </div>
               </div>
 
-              {/* Stats Breakdown Table */}
+              {/* Stats Breakdown Table per Individual Rule */}
               <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                  <h4 className="font-bold text-sm text-white">Detalhamento por Regra</h4>
+                  <h4 className="font-bold text-sm text-white">Detalhamento Individual por Regra</h4>
                   <button
                     onClick={handleClearStats}
                     className="text-xs text-slate-400 hover:text-rose-400 transition-colors flex items-center space-x-1"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Zerar métricas</span>
+                    <span>Zerar métricas gerais</span>
                   </button>
                 </div>
 
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-950/60 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                      <th className="py-3 px-4">Regra</th>
+                      <th className="py-3 px-4">Modo</th>
+                      <th className="py-3 px-4">Regra / Nome</th>
                       <th className="py-3 px-4">Original (Find)</th>
                       <th className="py-3 px-4">Substituto (Replace)</th>
+                      <th className="py-3 px-4">Uso (% do Total)</th>
                       <th className="py-3 px-4 text-right">Execuções</th>
+                      <th className="py-3 px-4 text-right">Ação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 text-xs font-mono">
-                    {Object.keys(stats).length === 0 ? (
+                    {rules.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="py-8 text-center text-slate-500 font-sans">
-                          Nenhuma substituição registrada ainda. Navegue em páginas com regras ativas para gerar estatísticas.
+                        <td colSpan={7} className="py-8 text-center text-slate-500 font-sans">
+                          Nenhuma regra cadastrada para monitorar.
                         </td>
                       </tr>
                     ) : (
-                      Object.entries(stats).map(([ruleId, count]) => {
-                        const rule = rules.find((r) => r.id === ruleId);
+                      rules.map((rule) => {
+                        const count = stats[rule.id] || 0;
+                        const pct = totalReplacementsCount > 0 ? Math.round((count / totalReplacementsCount) * 100) : 0;
                         return (
-                          <tr key={ruleId} className="hover:bg-slate-800/30 transition-colors">
-                            <td className="py-3 px-4 font-sans font-medium text-slate-200">
-                              {rule?.name || ruleId}
+                          <tr key={rule.id} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="py-3 px-4 font-sans">
+                              <span className={`text-[10px] px-2 py-0.5 rounded font-semibold border ${
+                                rule.mode === 'vip'
+                                  ? 'bg-amber-950 text-amber-400 border-amber-800/60'
+                                  : rule.mode === 'ultra'
+                                  ? 'bg-indigo-950 text-indigo-400 border-indigo-800/60'
+                                  : 'bg-slate-800 text-slate-400 border-slate-700'
+                              }`}>
+                                {rule.mode ? rule.mode.toUpperCase() : 'DOM'}
+                              </span>
                             </td>
-                            <td className="py-3 px-4 text-emerald-400">{rule?.find || '—'}</td>
-                            <td className="py-3 px-4 text-slate-300">{rule?.replace || '—'}</td>
+                            <td className="py-3 px-4 font-sans font-medium text-slate-200">
+                              {rule.name || rule.find}
+                            </td>
+                            <td className="py-3 px-4 text-emerald-400">{rule.find}</td>
+                            <td className="py-3 px-4 text-slate-300">{rule.replace || '(remover)'}</td>
+                            <td className="py-3 px-4 font-sans">
+                              <div className="flex items-center space-x-2 w-32">
+                                <div className="flex-1 bg-slate-950 rounded-full h-1.5 overflow-hidden border border-slate-800">
+                                  <div
+                                    className="bg-emerald-500 h-full rounded-full transition-all"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                                <span className="text-[10px] text-slate-400 font-mono">{pct}%</span>
+                              </div>
+                            </td>
                             <td className="py-3 px-4 text-right font-bold text-emerald-400">{count}</td>
+                            <td className="py-3 px-4 text-right font-sans">
+                              {count > 0 && (
+                                <button
+                                  onClick={() => handleClearSingleRuleStat(rule.id)}
+                                  className="text-[10px] text-slate-500 hover:text-rose-400 transition-colors"
+                                  title="Zerar estatística desta regra"
+                                >
+                                  Zerar
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         );
                       })
@@ -1569,6 +1865,13 @@ export const PanelApp: React.FC = () => {
                   <span className="text-slate-300">Case Sensitive (Aa)</span>
                 </label>
               </div>
+
+              {formUseRegex && formFind && checkRegexError(formFind, formCaseSensitive) && (
+                <div className="p-2.5 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-center space-x-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span><strong>Sintaxe Regex Inválida:</strong> {checkRegexError(formFind, formCaseSensitive)}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end space-x-2 pt-4 border-t border-slate-800">
@@ -1581,7 +1884,8 @@ export const PanelApp: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-500"
+                disabled={formUseRegex && !!checkRegexError(formFind, formCaseSensitive)}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white text-xs font-medium transition-all"
               >
                 Salvar Regra
               </button>

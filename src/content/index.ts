@@ -35,17 +35,28 @@ import { Rule } from '../types';
     (document.head || document.documentElement).appendChild(script);
   }
 
-  // Sync rules to Main World via window.postMessage & localStorage fallback
+  // Sync rules to Main World via CustomEvent & window.postMessage
   function syncVipRules(rules: Rule[], active: boolean) {
     const vipRules = rules.filter((r) => r.enabled);
     try {
-      localStorage.setItem('__tm_vip_rules', JSON.stringify({ active, rules: vipRules }));
+      document.dispatchEvent(
+        new CustomEvent('__TM_VIP_SYNC_EVENT__', { detail: { active, rules: vipRules } })
+      );
     } catch {
       // Ignored
     }
     window.postMessage({ type: '__TM_VIP_SYNC', active, rules: vipRules }, '*');
     window.postMessage({ type: '__TM_VIP__', action: 'setRules', active, rules: vipRules }, '*');
   }
+
+  // Listen for initial rules request from interceptor
+  document.addEventListener('__TM_VIP_REQUEST_RULES__', () => {
+    chrome.storage.local.get(['rules', 'vipActive'], (data) => {
+      const active = !!data.vipActive;
+      const rules: Rule[] = data.rules || [];
+      syncVipRules(rules, active);
+    });
+  });
 
   // --------------------------------------------------------------------------
   // [1] CORE DOM TEXT REPLACEMENT ENGINE (TreeWalker)
@@ -184,6 +195,12 @@ import { Rule } from '../types';
           totalReplacements += matches.length;
           text = text.replace(pattern, rule.replace ?? '');
           changed = true;
+
+          chrome.runtime.sendMessage({
+            action: 'updateStats',
+            ruleId: rule.id,
+            count: matches.length
+          }).catch(() => { });
         }
       }
 
@@ -243,17 +260,8 @@ import { Rule } from '../types';
     activeRules = rules;
 
     onDomReady(() => {
-      const count = replaceTextInNode(document.body, rules);
-      const dataCount = replaceInDataElements(rules);
-      const totalCount = count + dataCount;
-
-      if (totalCount > 0 && rules[0]?.id) {
-        chrome.runtime.sendMessage({
-          action: 'updateStats',
-          ruleId: rules[0].id,
-          count: totalCount
-        }).catch(() => {});
-      }
+      replaceTextInNode(document.body, rules);
+      replaceInDataElements(rules);
 
       // Progressive burst timer scans (200ms, 500ms, 1s, 2s, 3s, 4s, 5s) for async loads
       const burstDelays = [200, 500, 1000, 2000, 3000, 4000, 5000];

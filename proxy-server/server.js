@@ -366,6 +366,15 @@ app.use((req, res, next) => {
   next();
 });
 
+// Compatibility routes
+app.get('/status', (req, res) => {
+  res.redirect('/api/info');
+});
+
+app.get('/rules', (req, res) => {
+  res.redirect('/api/rules');
+});
+
 // Download CA certificate
 app.get('/cert', (req, res) => {
   res.download(CA_CERT_PATH, 'vip-ultra-ca.crt');

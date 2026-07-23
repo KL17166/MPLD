@@ -394,13 +394,20 @@ export const PopupApp: React.FC = () => {
 
           <button
             onClick={handleSaveRule}
-            className="flex items-center space-x-1 text-slate-400 hover:text-emerald-400 transition-colors text-xs font-medium"
+            disabled={useRegex && findText.trim() !== '' && (()=>{ try { new RegExp(findText, caseSensitive ? 'g':'gi'); return false; } catch { return true; } })()}
+            className="flex items-center space-x-1 text-slate-400 hover:text-emerald-400 disabled:text-slate-600 disabled:cursor-not-allowed transition-colors text-xs font-medium"
             title="Salvar como regra permanente no Painel"
           >
             <BookmarkPlus className="w-3.5 h-3.5 text-emerald-400" />
             <span>Salvar Regra</span>
           </button>
         </div>
+
+        {useRegex && findText.trim() !== '' && (()=>{ try { new RegExp(findText, caseSensitive ? 'g':'gi'); return null; } catch (e) { return (e as Error).message; } })() && (
+          <div className="p-2 rounded bg-rose-950/80 border border-rose-800 text-rose-300 text-[11px] font-sans">
+            <strong>Regex Inválido:</strong> {(()=>{ try { new RegExp(findText, caseSensitive ? 'g':'gi'); return ''; } catch (e) { return (e as Error).message; } })()}
+          </div>
+        )}
       </div>
 
       {/* Primary Actions */}

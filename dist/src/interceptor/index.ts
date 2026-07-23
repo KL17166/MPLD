@@ -14,19 +14,6 @@
   let vipRules: VipRuleItem[] = [];
   let vipActive = false;
 
-  // Sync load from localStorage on 1st script execution (before React/Vue/Angular init)
-  try {
-    const stored = localStorage.getItem('__tm_vip_rules');
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed && parsed.active && Array.isArray(parsed.rules)) {
-        vipRules = parsed.rules;
-        vipActive = true;
-      }
-    }
-  } catch {
-    // Ignored
-  }
 
   function escapeRegex(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -181,25 +168,32 @@
     }).catch(() => result);
   };
 
-  // 4. Runtime Message Listener
+  // 4. CustomEvent & Message Listeners (IPC Sync)
+  function handleSyncEvent(detail: { active?: boolean; rules?: VipRuleItem[] }) {
+    if (!detail) return;
+    vipActive = !!detail.active;
+    vipRules = Array.isArray(detail.rules) ? detail.rules : [];
+  }
+
+  // Listen for CustomEvent from Content Script
+  document.addEventListener('__TM_VIP_SYNC_EVENT__', ((event: CustomEvent) => {
+    handleSyncEvent(event.detail);
+  }) as EventListener);
+
+  // Fallback: window.postMessage Listener
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
-
     if (event.data && (event.data.type === '__TM_VIP_SYNC' || event.data.type === '__TM_VIP__')) {
-      vipActive = !!event.data.active;
-      vipRules = Array.isArray(event.data.rules) ? event.data.rules : [];
-
-      try {
-        if (vipActive && vipRules.length > 0) {
-          localStorage.setItem('__tm_vip_rules', JSON.stringify({ active: true, rules: vipRules }));
-        } else {
-          localStorage.removeItem('__tm_vip_rules');
-        }
-      } catch {
-        // Ignored
-      }
+      handleSyncEvent({ active: event.data.active, rules: event.data.rules });
     }
   });
+
+  // Request rules immediately from content script on init
+  try {
+    document.dispatchEvent(new CustomEvent('__TM_VIP_REQUEST_RULES__'));
+  } catch {
+    // Ignored
+  }
 
   // @ts-expect-error Global marker
   window.__textManipulatorVIP = true;

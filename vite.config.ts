@@ -60,7 +60,8 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       input: {
-        panel: 'src/panel/index.html'
+        panel: 'src/panel/index.html',
+        interceptor: 'src/interceptor/index.ts'
       }
     }
   }
