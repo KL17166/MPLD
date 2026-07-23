@@ -153,66 +153,68 @@ export const PopupApp: React.FC = () => {
   };
 
   const handleSaveRule = () => {
-    if (!findText.trim()) {
+    const searchTarget = findText.trim();
+    if (!searchTarget) {
       setStatusMsg({ text: 'Informe o texto no campo Buscar.', type: 'error' });
       setTimeout(() => setStatusMsg(null), 3000);
       return;
     }
 
-    // Always fetch latest rules from background first to avoid overwriting
-    chrome.runtime.sendMessage({ action: 'getRules' }, (res) => {
-      const currentRules: Rule[] = res?.rules || [];
-      const searchTarget = findText.trim();
-      const existingIndex = currentRules.findIndex(
-        (r) => r.find.trim().toLowerCase() === searchTarget.toLowerCase()
+    const existingIndex = rules.findIndex(
+      (r) => r.find.trim().toLowerCase() === searchTarget.toLowerCase()
+    );
+
+    let updatedRules: Rule[];
+
+    if (existingIndex >= 0) {
+      updatedRules = rules.map((r, idx) =>
+        idx === existingIndex
+          ? { ...r, replace: replaceText, useRegex, caseSensitive, replaceAll, enabled: true }
+          : r
       );
+    } else {
+      const newRule: Rule = {
+        id: 'rule-' + Date.now(),
+        name: searchTarget,
+        find: searchTarget,
+        replace: replaceText,
+        useRegex,
+        caseSensitive,
+        replaceAll,
+        enabled: true,
+        mode: 'normal',
+        createdAt: Date.now()
+      };
+      updatedRules = [newRule, ...rules];
+    }
 
-      let updatedRules: Rule[];
+    setRules(updatedRules);
 
-      if (existingIndex >= 0) {
-        updatedRules = currentRules.map((r, idx) =>
-          idx === existingIndex
-            ? { ...r, replace: replaceText, useRegex, caseSensitive, replaceAll, enabled: true }
-            : r
-        );
-      } else {
-        const newRule: Rule = {
-          id: 'rule-' + Date.now(),
-          name: searchTarget,
-          find: searchTarget,
-          replace: replaceText,
-          useRegex,
-          caseSensitive,
-          replaceAll,
-          enabled: true,
-          mode: 'normal',
-          createdAt: Date.now()
-        };
-        updatedRules = [newRule, ...currentRules];
+    // Save directly to chrome.storage.local for instant persistence
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ rules: updatedRules });
+    }
+
+    // Broadcast to background script & active tab
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      chrome.runtime.sendMessage({ action: 'saveRules', rules: updatedRules }).catch(() => {});
+      if (currentTabId) {
+        chrome.tabs.sendMessage(currentTabId, {
+          action: 'applyRules',
+          rules: updatedRules.filter((r) => r.enabled)
+        }).catch(() => {});
       }
+    }
 
-      setRules(updatedRules);
-
-      chrome.runtime.sendMessage({ action: 'saveRules', rules: updatedRules }, () => {
-        setStatusMsg({
-          text: existingIndex >= 0 ? 'Regra atualizada!' : 'Regra salva no Painel!',
-          type: 'success'
-        });
-
-        // Trigger immediate replacement on active tab
-        if (currentTabId) {
-          chrome.tabs.sendMessage(currentTabId, {
-            action: 'applyRules',
-            rules: updatedRules.filter((r) => r.enabled)
-          }).catch(() => {});
-        }
-
-        setFindText('');
-        setReplaceText('');
-        setMatchCount(null);
-        setTimeout(() => setStatusMsg(null), 3000);
-      });
+    setStatusMsg({
+      text: existingIndex >= 0 ? 'Regra atualizada!' : 'Regra salva com sucesso!',
+      type: 'success'
     });
+
+    setFindText('');
+    setReplaceText('');
+    setMatchCount(null);
+    setTimeout(() => setStatusMsg(null), 3000);
   };
 
   const handleToggleRule = (id: string) => {
@@ -412,9 +414,10 @@ export const PopupApp: React.FC = () => {
           </div>
 
           <button
+            type="button"
             onClick={handleSaveRule}
             disabled={useRegex && findText.trim() !== '' && (()=>{ try { new RegExp(findText, caseSensitive ? 'g':'gi'); return false; } catch { return true; } })()}
-            className="flex items-center space-x-1 text-slate-400 hover:text-emerald-400 disabled:text-slate-600 disabled:cursor-not-allowed transition-colors text-xs font-medium"
+            className="flex items-center space-x-1 text-slate-400 hover:text-emerald-400 disabled:text-slate-600 disabled:cursor-not-allowed transition-colors text-xs font-medium cursor-pointer"
             title="Salvar como regra permanente no Painel"
           >
             <BookmarkPlus className="w-3.5 h-3.5 text-emerald-400" />
