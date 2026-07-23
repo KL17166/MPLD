@@ -8,7 +8,9 @@ import { Rule } from '../types';
   let isHighlightActive = false;
 
   function escapeRegex(str: string): string {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return str
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\s+/g, '[\\s\\u00a0]+');
   }
 
   // Wait for DOM ready
@@ -37,7 +39,7 @@ import { Rule } from '../types';
 
   // Sync rules to Main World via CustomEvent & window.postMessage & localStorage
   function syncVipRules(rules: Rule[], active: boolean) {
-    const vipRules = rules.filter((r) => r.enabled && r.mode === 'vip');
+    const vipRules = rules.filter((r) => r.enabled && (r.mode === 'vip' || !r.mode || r.mode === 'normal'));
     try {
       if (active && vipRules.length > 0) {
         localStorage.setItem('__tm_vip_rules', JSON.stringify({ active: true, rules: vipRules }));
@@ -226,29 +228,11 @@ import { Rule } from '../types';
 
       if (changed) {
         isProcessing = true;
-        if (el.childNodes.length === 1 && el.childNodes[0].nodeType === 3) {
-          el.childNodes[0].nodeValue = text;
-        } else if (el.childNodes.length === 0) {
-          el.textContent = text;
-        } else {
-          const innerWalker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-          let n: Node | null;
-          while ((n = innerWalker.nextNode())) {
-            let nodeText = n.nodeValue || '';
-            for (const rule of rules) {
-              if (!rule.find || !rule.enabled) continue;
-              let p: RegExp;
-              const isG = rule.replaceAll !== false;
-              const f = (rule.caseSensitive ? '' : 'i') + (isG ? 'g' : '');
-              if (rule.useRegex) {
-                try { p = new RegExp(rule.find, f); } catch { continue; }
-              } else {
-                p = new RegExp(escapeRegex(rule.find), f);
-              }
-              nodeText = nodeText.replace(p, rule.replace ?? '');
-            }
-            n.nodeValue = nodeText;
-          }
+        el.textContent = text;
+        if (isHighlightActive && (el as HTMLElement)) {
+          (el as HTMLElement).dataset.mpldHighlight = 'true';
+          (el as HTMLElement).style.outline = '2px dashed #22c55e';
+          (el as HTMLElement).style.backgroundColor = 'rgba(34, 197, 94, 0.1)';
         }
         isProcessing = false;
       }
