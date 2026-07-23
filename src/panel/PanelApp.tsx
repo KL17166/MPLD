@@ -109,9 +109,22 @@ export const PanelApp: React.FC = () => {
   const [formMode, setFormMode] = useState<'normal' | 'vip' | 'ultra'>('normal');
   const [formUseRegex, setFormUseRegex] = useState<boolean>(false);
   const [formCaseSensitive, setFormCaseSensitive] = useState<boolean>(false);
+  const [formReplaceAll, setFormReplaceAll] = useState<boolean>(true);
 
   // Status message feedback
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
+
+  const getProxyApiUrl = (path: string) => {
+    const host = proxyHostInput.trim() || '127.0.0.1';
+    const port = proxyDashboardPortInput || 8888;
+    return `http://${host}:${port}${path}`;
+  };
+
+  const getProxyWsUrl = () => {
+    const host = proxyHostInput.trim() || '127.0.0.1';
+    const port = proxyDashboardPortInput || 8888;
+    return `ws://${host}:${port}`;
+  };
 
   useEffect(() => {
     loadAllData();
@@ -178,7 +191,7 @@ export const PanelApp: React.FC = () => {
 
   const checkProxyServerStatus = async () => {
     try {
-      const res = await fetch('http://localhost:8888/api/info', { method: 'GET' });
+      const res = await fetch(getProxyApiUrl('/api/info'), { method: 'GET' });
       if (res.ok) {
         setProxyServerOnline(true);
         fetchProxyServerRules();
@@ -193,7 +206,7 @@ export const PanelApp: React.FC = () => {
 
   const fetchProxyServerRules = async () => {
     try {
-      const res = await fetch('http://localhost:8888/api/rules');
+      const res = await fetch(getProxyApiUrl('/api/rules'));
       if (res.ok) {
         const data = await res.json();
         setProxyServerRules(data);
@@ -206,7 +219,7 @@ export const PanelApp: React.FC = () => {
   const connectProxyWs = () => {
     if (wsRef.current) return;
     try {
-      const ws = new WebSocket('ws://localhost:8888');
+      const ws = new WebSocket(getProxyWsUrl());
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -237,31 +250,12 @@ export const PanelApp: React.FC = () => {
   };
 
   const handleAddUltraServerRule = async () => {
-    const find = prompt('Texto ou Regex para buscar na resposta da API:');
-    if (!find) return;
-    const replace = prompt('Substituir por (deixe vazio para remover):', '') ?? '';
-    const name = prompt('Nome descritivo da regra:', 'Regra Proxy Server') || 'Regra Proxy Server';
-
-    try {
-      const res = await fetch('http://localhost:8888/api/rules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, find, replace, enabled: true })
-      });
-      if (res.ok) {
-        fetchProxyServerRules();
-        showStatus('Regra adicionada no servidor Proxy Node.js!', 'success');
-      } else {
-        showStatus('Erro ao comunicar com o servidor Proxy Node.js.', 'error');
-      }
-    } catch {
-      showStatus('Servidor Proxy offline. Inicie o servidor em proxy-server/ primeiro.', 'error');
-    }
+    handleOpenCreateModal('ultra');
   };
 
   const handleToggleUltraServerRule = async (id: string, enabled: boolean) => {
     try {
-      await fetch(`http://localhost:8888/api/rules/${id}`, {
+      await fetch(getProxyApiUrl(`/api/rules/${id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled })
@@ -275,7 +269,7 @@ export const PanelApp: React.FC = () => {
   const handleDeleteUltraServerRule = async (id: string) => {
     if (!confirm('Excluir esta regra do servidor Proxy?')) return;
     try {
-      await fetch(`http://localhost:8888/api/rules/${id}`, { method: 'DELETE' });
+      await fetch(getProxyApiUrl(`/api/rules/${id}`), { method: 'DELETE' });
       fetchProxyServerRules();
       showStatus('Regra removida do servidor Proxy.', 'info');
     } catch {
@@ -284,15 +278,15 @@ export const PanelApp: React.FC = () => {
   };
 
   const handleSyncRulesToProxyServer = async () => {
-    const ultraRules = rules.filter((r) => r.mode === 'ultra' || r.enabled);
+    const ultraRules = rules.filter((r) => r.mode === 'ultra' && r.enabled);
     if (ultraRules.length === 0) {
-      showStatus('Nenhuma regra disponível para enviar ao Proxy.', 'info');
+      showStatus('Nenhuma regra do Modo Ultra ativa para enviar ao Proxy.', 'info');
       return;
     }
     let successCount = 0;
     for (const r of ultraRules) {
       try {
-        const res = await fetch('http://localhost:8888/api/rules', {
+        const res = await fetch(getProxyApiUrl('/api/rules'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -302,6 +296,7 @@ export const PanelApp: React.FC = () => {
             urlFilter: r.urlFilter || '',
             useRegex: r.useRegex,
             caseSensitive: r.caseSensitive,
+            replaceAll: r.replaceAll !== false,
             enabled: r.enabled
           })
         });
@@ -311,7 +306,7 @@ export const PanelApp: React.FC = () => {
       }
     }
     fetchProxyServerRules();
-    showStatus(`${successCount} regra(s) sincronizada(s) com o servidor Proxy Node.js!`, 'success');
+    showStatus(`${successCount} regra(s) Ultra sincronizada(s) com o servidor Proxy Node.js!`, 'success');
   };
 
   const handleSaveProxyConfig = (e: React.FormEvent) => {
@@ -329,6 +324,7 @@ export const PanelApp: React.FC = () => {
         showStatus('Configurações do proxy salvas com sucesso!', 'success');
       });
     }
+    checkProxyServerStatus();
   };
 
   const handleRunVipTest = () => {
@@ -339,10 +335,11 @@ export const PanelApp: React.FC = () => {
     }
     let result = vipTestPayload;
     let matchesCount = 0;
-    const activeVipRules = rules.filter((r) => r.mode === 'vip' || (vipActive && r.enabled));
+    const activeVipRules = rules.filter((r) => r.mode === 'vip' && r.enabled);
     for (const r of activeVipRules) {
       if (!r.find || !r.enabled) continue;
-      const flags = r.caseSensitive ? 'g' : 'gi';
+      const isGlobal = r.replaceAll !== false;
+      const flags = (r.caseSensitive ? '' : 'i') + (isGlobal ? 'g' : '');
       let pattern: RegExp;
       if (r.useRegex) {
         try {
@@ -355,7 +352,7 @@ export const PanelApp: React.FC = () => {
       }
       const m = result.match(pattern);
       if (m) {
-        matchesCount += m.length;
+        matchesCount += isGlobal ? m.length : 1;
         result = result.replace(pattern, r.replace ?? '');
       }
     }
@@ -399,6 +396,7 @@ export const PanelApp: React.FC = () => {
     setFormMode(mode);
     setFormUseRegex(false);
     setFormCaseSensitive(false);
+    setFormReplaceAll(true);
     setIsModalOpen(true);
   };
 
@@ -412,6 +410,7 @@ export const PanelApp: React.FC = () => {
     setFormMode(rule.mode || 'normal');
     setFormUseRegex(rule.useRegex);
     setFormCaseSensitive(rule.caseSensitive);
+    setFormReplaceAll(rule.replaceAll !== false);
     setIsModalOpen(true);
   };
 
@@ -419,38 +418,44 @@ export const PanelApp: React.FC = () => {
     e.preventDefault();
     if (!formFind.trim()) return;
 
+    const existingRule = editingRuleId ? rules.find((r) => r.id === editingRuleId) : null;
+    const targetRule: Rule = {
+      id: editingRuleId || ('rule-' + Date.now()),
+      name: formName || formFind,
+      find: formFind,
+      replace: formReplace,
+      selector: formSelector,
+      urlFilter: formUrlFilter,
+      mode: formMode,
+      useRegex: formUseRegex,
+      caseSensitive: formCaseSensitive,
+      replaceAll: formReplaceAll,
+      enabled: existingRule ? existingRule.enabled : true,
+      createdAt: existingRule ? existingRule.createdAt : Date.now()
+    };
+
     if (editingRuleId) {
-      const updated = rules.map((r) =>
-        r.id === editingRuleId
-          ? {
-              ...r,
-              name: formName || formFind,
-              find: formFind,
-              replace: formReplace,
-              selector: formSelector,
-              urlFilter: formUrlFilter,
-              mode: formMode,
-              useRegex: formUseRegex,
-              caseSensitive: formCaseSensitive
-            }
-          : r
-      );
+      const updated = rules.map((r) => (r.id === editingRuleId ? targetRule : r));
       saveRulesToStorage(updated);
     } else {
-      const newRule: Rule = {
-        id: 'rule-' + Date.now(),
-        name: formName || formFind,
-        find: formFind,
-        replace: formReplace,
-        selector: formSelector,
-        urlFilter: formUrlFilter,
-        mode: formMode,
-        useRegex: formUseRegex,
-        caseSensitive: formCaseSensitive,
-        enabled: true,
-        createdAt: Date.now()
-      };
-      saveRulesToStorage([newRule, ...rules]);
+      saveRulesToStorage([targetRule, ...rules]);
+    }
+
+    if (formMode === 'ultra') {
+      fetch(getProxyApiUrl('/api/rules'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: targetRule.name,
+          find: targetRule.find,
+          replace: targetRule.replace,
+          urlFilter: targetRule.urlFilter || '',
+          useRegex: targetRule.useRegex,
+          caseSensitive: targetRule.caseSensitive,
+          replaceAll: targetRule.replaceAll !== false,
+          enabled: targetRule.enabled
+        })
+      }).then(() => fetchProxyServerRules()).catch(() => {});
     }
 
     setIsModalOpen(false);
@@ -1844,7 +1849,7 @@ export const PanelApp: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center space-x-4 pt-1">
+              <div className="flex flex-wrap items-center gap-4 pt-1">
                 <label className="flex items-center space-x-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1863,6 +1868,16 @@ export const PanelApp: React.FC = () => {
                     className="accent-emerald-500 rounded bg-slate-800"
                   />
                   <span className="text-slate-300">Case Sensitive (Aa)</span>
+                </label>
+
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formReplaceAll}
+                    onChange={(e) => setFormReplaceAll(e.target.checked)}
+                    className="accent-emerald-500 rounded bg-slate-800"
+                  />
+                  <span className="text-slate-300">Substituir Todas (Replace All)</span>
                 </label>
               </div>
 

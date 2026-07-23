@@ -33,7 +33,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/index.ts-BNOM3L0H.js"
+        "assets/index.ts-YFy2F8xs.js"
       ],
       "matches": [
         "<all_urls>"
@@ -49,7 +49,7 @@
       ],
       "resources": [
         "src/interceptor/index.ts",
-        "assets/index.ts-BNOM3L0H.js"
+        "assets/index.ts-YFy2F8xs.js"
       ],
       "use_dynamic_url": false
     }

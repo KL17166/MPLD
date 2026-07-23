@@ -31,14 +31,19 @@ import { Rule } from '../types';
     if (document.getElementById('__tm_interceptor_script')) return;
     const script = document.createElement('script');
     script.id = '__tm_interceptor_script';
-    script.src = chrome.runtime.getURL('src/interceptor/index.js');
+    script.src = chrome.runtime.getURL('src/interceptor/index.ts');
     (document.head || document.documentElement).appendChild(script);
   }
 
-  // Sync rules to Main World via CustomEvent & window.postMessage
+  // Sync rules to Main World via CustomEvent & window.postMessage & localStorage
   function syncVipRules(rules: Rule[], active: boolean) {
-    const vipRules = rules.filter((r) => r.enabled);
+    const vipRules = rules.filter((r) => r.enabled && r.mode === 'vip');
     try {
+      if (active && vipRules.length > 0) {
+        localStorage.setItem('__tm_vip_rules', JSON.stringify({ active: true, rules: vipRules }));
+      } else {
+        localStorage.removeItem('__tm_vip_rules');
+      }
       document.dispatchEvent(
         new CustomEvent('__TM_VIP_SYNC_EVENT__', { detail: { active, rules: vipRules } })
       );
@@ -108,7 +113,8 @@ import { Rule } from '../types';
           if (!textNode.parentElement.closest(rule.selector)) continue;
         }
 
-        const flags = rule.caseSensitive ? 'g' : 'gi';
+        const isGlobal = rule.replaceAll !== false;
+        const flags = (rule.caseSensitive ? '' : 'i') + (isGlobal ? 'g' : '');
         let pattern: RegExp;
 
         if (rule.useRegex) {
@@ -123,7 +129,8 @@ import { Rule } from '../types';
 
         const matches = text.match(pattern);
         if (matches) {
-          totalReplacements += matches.length;
+          const matchCount = isGlobal ? matches.length : 1;
+          totalReplacements += matchCount;
           text = text.replace(pattern, rule.replace ?? '');
           changed = true;
 
@@ -131,7 +138,7 @@ import { Rule } from '../types';
           chrome.runtime.sendMessage({
             action: 'updateStats',
             ruleId: rule.id,
-            count: matches.length
+            count: matchCount
           }).catch(() => { });
         }
       }
@@ -141,6 +148,7 @@ import { Rule } from '../types';
         textNode.textContent = text;
 
         if (isHighlightActive && textNode.parentElement) {
+          textNode.parentElement.dataset.mpldHighlight = 'true';
           textNode.parentElement.style.outline = '2px dashed #22c55e';
           textNode.parentElement.style.backgroundColor = 'rgba(34, 197, 94, 0.1)';
         }
@@ -150,6 +158,16 @@ import { Rule } from '../types';
     }
 
     return totalReplacements;
+  }
+
+  // Clear highlight styles when feature is toggled off
+  function clearHighlights() {
+    const elements = document.querySelectorAll('[data-mpld-highlight="true"]');
+    elements.forEach((el) => {
+      (el as HTMLElement).style.outline = '';
+      (el as HTMLElement).style.backgroundColor = '';
+      delete (el as HTMLElement).dataset.mpldHighlight;
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -182,7 +200,8 @@ import { Rule } from '../types';
         if (!rule.find || !rule.enabled) continue;
 
         let pattern: RegExp;
-        const flags = rule.caseSensitive ? 'g' : 'gi';
+        const isGlobal = rule.replaceAll !== false;
+        const flags = (rule.caseSensitive ? '' : 'i') + (isGlobal ? 'g' : '');
 
         if (rule.useRegex) {
           try { pattern = new RegExp(rule.find, flags); } catch { continue; }
@@ -192,14 +211,15 @@ import { Rule } from '../types';
 
         const matches = text.match(pattern);
         if (matches) {
-          totalReplacements += matches.length;
+          const matchCount = isGlobal ? matches.length : 1;
+          totalReplacements += matchCount;
           text = text.replace(pattern, rule.replace ?? '');
           changed = true;
 
           chrome.runtime.sendMessage({
             action: 'updateStats',
             ruleId: rule.id,
-            count: matches.length
+            count: matchCount
           }).catch(() => { });
         }
       }
@@ -218,7 +238,8 @@ import { Rule } from '../types';
             for (const rule of rules) {
               if (!rule.find || !rule.enabled) continue;
               let p: RegExp;
-              const f = rule.caseSensitive ? 'g' : 'gi';
+              const isG = rule.replaceAll !== false;
+              const f = (rule.caseSensitive ? '' : 'i') + (isG ? 'g' : '');
               if (rule.useRegex) {
                 try { p = new RegExp(rule.find, f); } catch { continue; }
               } else {
@@ -274,26 +295,32 @@ import { Rule } from '../types';
         }, delay);
       }
 
-      // Debounced MutationObserver
-      if (observe && !activeObserver) {
-        let mutationTimer: number | null = null;
-        activeObserver = new MutationObserver(() => {
-          if (isProcessing) return;
-          if (mutationTimer !== null) clearTimeout(mutationTimer);
-          mutationTimer = window.setTimeout(() => {
-            if (activeRules.length > 0 && document.body) {
-              replaceTextInNode(document.body, activeRules);
-              replaceInDataElements(activeRules);
-            }
-          }, 30);
-        });
+      // Debounced MutationObserver (respects watchChanges setting)
+      chrome.storage.local.get(['watchChanges'], (data) => {
+        const shouldObserve = data.watchChanges !== false;
+        if (observe && shouldObserve && !activeObserver && document.body) {
+          let mutationTimer: number | null = null;
+          activeObserver = new MutationObserver(() => {
+            if (isProcessing) return;
+            if (mutationTimer !== null) clearTimeout(mutationTimer);
+            mutationTimer = window.setTimeout(() => {
+              if (activeRules.length > 0 && document.body) {
+                replaceTextInNode(document.body, activeRules);
+                replaceInDataElements(activeRules);
+              }
+            }, 30);
+          });
 
-        activeObserver.observe(document.body, {
-          childList: true,
-          subtree: true,
-          characterData: true
-        });
-      }
+          activeObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true
+          });
+        } else if (!shouldObserve && activeObserver) {
+          activeObserver.disconnect();
+          activeObserver = null;
+        }
+      });
 
       // Continuous polling check
       chrome.storage.local.get(['continuousMode', 'pollingInterval'], (data) => {
@@ -425,6 +452,11 @@ import { Rule } from '../types';
 
     if (message.action === 'toggleHighlight') {
       isHighlightActive = !!message.active;
+      if (!isHighlightActive) {
+        clearHighlights();
+      } else if (document.body && activeRules.length > 0) {
+        replaceTextInNode(document.body, activeRules);
+      }
       sendResponse({ success: true });
       return true;
     }

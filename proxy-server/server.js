@@ -420,6 +420,7 @@ app.post('/api/rules', (req, res) => {
     urlFilter: req.body.urlFilter || '',
     useRegex: !!req.body.useRegex,
     caseSensitive: !!req.body.caseSensitive,
+    replaceAll: req.body.replaceAll !== false,
     enabled: req.body.enabled !== false
   };
   rules.push(rule);
@@ -430,7 +431,7 @@ app.post('/api/rules', (req, res) => {
 app.put('/api/rules/:id', (req, res) => {
   const rule = rules.find(r => r.id === req.params.id);
   if (!rule) return res.status(404).json({ error: 'Not found' });
-  const allowed = ['name', 'find', 'replace', 'urlFilter', 'useRegex', 'caseSensitive', 'enabled'];
+  const allowed = ['name', 'find', 'replace', 'urlFilter', 'useRegex', 'caseSensitive', 'replaceAll', 'enabled'];
   for (const key of allowed) {
     if (req.body[key] !== undefined) rule[key] = req.body[key];
   }

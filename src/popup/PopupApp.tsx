@@ -34,6 +34,7 @@ export const PopupApp: React.FC = () => {
   const [replaceText, setReplaceText] = useState<string>('');
   const [useRegex, setUseRegex] = useState<boolean>(false);
   const [caseSensitive, setCaseSensitive] = useState<boolean>(false);
+  const [replaceAll, setReplaceAll] = useState<boolean>(true);
   const [matchCount, setMatchCount] = useState<number | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
 
@@ -126,7 +127,7 @@ export const PopupApp: React.FC = () => {
           action: 'quickReplace',
           find: findText,
           replace: replaceText,
-          options: { useRegex, caseSensitive }
+          options: { useRegex, caseSensitive, replaceAll }
         },
         (res) => {
           const count = res?.replacements ?? 0;
@@ -171,7 +172,7 @@ export const PopupApp: React.FC = () => {
       if (existingIndex >= 0) {
         updatedRules = currentRules.map((r, idx) =>
           idx === existingIndex
-            ? { ...r, replace: replaceText, useRegex, caseSensitive, enabled: true }
+            ? { ...r, replace: replaceText, useRegex, caseSensitive, replaceAll, enabled: true }
             : r
         );
       } else {
@@ -182,6 +183,7 @@ export const PopupApp: React.FC = () => {
           replace: replaceText,
           useRegex,
           caseSensitive,
+          replaceAll,
           enabled: true,
           mode: 'normal',
           createdAt: Date.now()
@@ -236,6 +238,13 @@ export const PopupApp: React.FC = () => {
     if (typeof chrome !== 'undefined' && chrome.storage) {
       chrome.storage.local.set({ popupHistory: [] });
     }
+    // Clean temporary quick rules (IDs starting with 'quick-') from storage
+    chrome.runtime.sendMessage({ action: 'getRules' }, (res) => {
+      const currentRules: Rule[] = res?.rules || [];
+      const cleaned = currentRules.filter((r) => !r.id.startsWith('quick-'));
+      setRules(cleaned);
+      chrome.runtime.sendMessage({ action: 'saveRules', rules: cleaned });
+    });
   };
 
   const handleSelectHistory = (item: HistoryItem) => {
@@ -370,8 +379,8 @@ export const PopupApp: React.FC = () => {
 
         {/* Option Toggles */}
         <div className="flex items-center justify-between text-xs pt-1">
-          <div className="flex items-center space-x-3">
-            <label className="flex items-center space-x-1.5 cursor-pointer text-slate-300">
+          <div className="flex items-center space-x-2">
+            <label className="flex items-center space-x-1 cursor-pointer text-slate-300">
               <input
                 type="checkbox"
                 checked={useRegex}
@@ -381,14 +390,24 @@ export const PopupApp: React.FC = () => {
               <span>Regex</span>
             </label>
 
-            <label className="flex items-center space-x-1.5 cursor-pointer text-slate-300">
+            <label className="flex items-center space-x-1 cursor-pointer text-slate-300">
               <input
                 type="checkbox"
                 checked={caseSensitive}
                 onChange={(e) => setCaseSensitive(e.target.checked)}
                 className="accent-emerald-500 rounded bg-slate-800 border-slate-700"
               />
-              <span>Aa (Case)</span>
+              <span>Aa</span>
+            </label>
+
+            <label className="flex items-center space-x-1 cursor-pointer text-slate-300">
+              <input
+                type="checkbox"
+                checked={replaceAll}
+                onChange={(e) => setReplaceAll(e.target.checked)}
+                className="accent-emerald-500 rounded bg-slate-800 border-slate-700"
+              />
+              <span>Todas</span>
             </label>
           </div>
 
@@ -477,11 +496,11 @@ export const PopupApp: React.FC = () => {
         </div>
       )}
 
-      {/* Active Rules Quick List */}
+      {/* Active Rules Quick List (Filtered for current site) */}
       <div className="flex-1 flex flex-col pt-2 border-t border-slate-800">
         <div className="flex items-center justify-between text-xs mb-2">
           <span className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
-            Regras Salvas ({activeRulesCount} ativas)
+            Regras Aplicáveis ({rules.filter((r) => r.enabled && (!r.urlFilter || currentHost.includes(r.urlFilter))).length} ativas)
           </span>
           <button
             onClick={handleOpenPanel}
@@ -498,37 +517,48 @@ export const PopupApp: React.FC = () => {
               Nenhuma regra salva no Painel.
             </div>
           ) : (
-            rules.slice(0, 5).map((rule) => (
-              <div
-                key={rule.id}
-                className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800/60 hover:border-slate-700 transition-colors"
-              >
-                <div className="truncate max-w-[170px]" title={`${rule.find} → ${rule.replace}`}>
-                  <span className="text-emerald-400">{rule.find}</span>
-                  <span className="text-slate-500 mx-1">→</span>
-                  <span className="text-slate-300">{rule.replace || '""'}</span>
+            rules
+              .filter((r) => {
+                if (!r.urlFilter || r.urlFilter.trim() === '') return true;
+                if (!currentHost || currentHost === 'carregando...' || currentHost.includes('Página local')) return true;
+                try {
+                  return new RegExp(r.urlFilter).test(currentHost);
+                } catch {
+                  return currentHost.includes(r.urlFilter);
+                }
+              })
+              .slice(0, 5)
+              .map((rule) => (
+                <div
+                  key={rule.id}
+                  className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800/60 hover:border-slate-700 transition-colors"
+                >
+                  <div className="truncate max-w-[170px]" title={`${rule.find} → ${rule.replace}`}>
+                    <span className="text-emerald-400">{rule.find}</span>
+                    <span className="text-slate-500 mx-1">→</span>
+                    <span className="text-slate-300">{rule.replace || '""'}</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5 font-sans">
+                    <button
+                      onClick={() => handleToggleRule(rule.id)}
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                        rule.enabled
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
+                          : 'bg-slate-800 text-slate-500 border border-slate-700'
+                      }`}
+                    >
+                      {rule.enabled ? 'ON' : 'OFF'}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteRule(rule.id)}
+                      className="text-slate-500 hover:text-rose-400 p-0.5 transition-colors"
+                      title="Excluir regra"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center space-x-1.5 font-sans">
-                  <button
-                    onClick={() => handleToggleRule(rule.id)}
-                    className={`text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer ${
-                      rule.enabled
-                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
-                        : 'bg-slate-800 text-slate-500 border border-slate-700'
-                    }`}
-                  >
-                    {rule.enabled ? 'ON' : 'OFF'}
-                  </button>
-                  <button
-                    onClick={() => handleDeleteRule(rule.id)}
-                    className="text-slate-500 hover:text-rose-400 p-0.5 transition-colors"
-                    title="Excluir regra"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            ))
+              ))
           )}
         </div>
       </div>

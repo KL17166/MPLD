@@ -20,6 +20,7 @@ export interface VipRule {
   replace: string;
   useRegex: boolean;
   caseSensitive: boolean;
+  replaceAll?: boolean;
   enabled: boolean;
   urlFilter?: string;
 }

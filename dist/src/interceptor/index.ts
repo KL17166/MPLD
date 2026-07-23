@@ -7,6 +7,7 @@
     replace: string;
     useRegex: boolean;
     caseSensitive: boolean;
+    replaceAll?: boolean;
     enabled: boolean;
     urlFilter?: string;
   }
@@ -14,6 +15,19 @@
   let vipRules: VipRuleItem[] = [];
   let vipActive = false;
 
+  // Synchronous initial load from localStorage (instant readiness at document_start)
+  try {
+    const stored = localStorage.getItem('__tm_vip_rules');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && parsed.active && Array.isArray(parsed.rules)) {
+        vipRules = parsed.rules;
+        vipActive = true;
+      }
+    }
+  } catch {
+    // Ignored
+  }
 
   function escapeRegex(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -28,7 +42,8 @@
     for (const rule of vipRules) {
       if (!rule.find || !rule.enabled) continue;
 
-      const flags = rule.caseSensitive ? 'g' : 'gi';
+      const isGlobal = rule.replaceAll !== false;
+      const flags = (rule.caseSensitive ? '' : 'i') + (isGlobal ? 'g' : '');
       let pattern: RegExp;
 
       if (rule.useRegex) {
@@ -173,6 +188,15 @@
     if (!detail) return;
     vipActive = !!detail.active;
     vipRules = Array.isArray(detail.rules) ? detail.rules : [];
+    try {
+      if (vipActive && vipRules.length > 0) {
+        localStorage.setItem('__tm_vip_rules', JSON.stringify({ active: true, rules: vipRules }));
+      } else {
+        localStorage.removeItem('__tm_vip_rules');
+      }
+    } catch {
+      // Ignored
+    }
   }
 
   // Listen for CustomEvent from Content Script
