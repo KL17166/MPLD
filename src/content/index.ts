@@ -1,13 +1,29 @@
 import { Rule } from '../types';
 
 (() => {
+  let activeObserver: MutationObserver | null = null;
   let activeRules: Rule[] = [];
-  let isHighlightActive = false;
+  let pollingTimer: number | null = null;
   let isProcessing = false;
-  let observer: MutationObserver | null = null;
+  let isHighlightActive = false;
 
   function escapeRegex(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // Wait for DOM ready
+  function onDomReady(callback: () => void) {
+    if (document.body) {
+      callback();
+    } else {
+      const observer = new MutationObserver(() => {
+        if (document.body) {
+          observer.disconnect();
+          callback();
+        }
+      });
+      observer.observe(document.documentElement, { childList: true });
+    }
   }
 
   // Inject Main World Interceptor
@@ -21,16 +37,20 @@ import { Rule } from '../types';
 
   // Sync rules to Main World via window.postMessage & localStorage fallback
   function syncVipRules(rules: Rule[], active: boolean) {
-    const vipRules = rules.filter(r => r.enabled);
+    const vipRules = rules.filter((r) => r.enabled);
     try {
       localStorage.setItem('__tm_vip_rules', JSON.stringify({ active, rules: vipRules }));
     } catch {
       // Ignored
     }
     window.postMessage({ type: '__TM_VIP_SYNC', active, rules: vipRules }, '*');
+    window.postMessage({ type: '__TM_VIP__', action: 'setRules', active, rules: vipRules }, '*');
   }
 
-  function applyDomReplacements(node: Node, rules: Rule[]): number {
+  // --------------------------------------------------------------------------
+  // [1] CORE DOM TEXT REPLACEMENT ENGINE (TreeWalker)
+  // --------------------------------------------------------------------------
+  function replaceTextInNode(node: Node, rules: Rule[]): number {
     if (!node || rules.length === 0) return 0;
     let totalReplacements = 0;
 
@@ -62,6 +82,15 @@ import { Rule } from '../types';
 
       for (const rule of rules) {
         if (!rule.find || !rule.enabled) continue;
+
+        // Check URL Filter if defined
+        if (rule.urlFilter && rule.urlFilter.trim() !== '') {
+          try {
+            if (!new RegExp(rule.urlFilter).test(window.location.href)) continue;
+          } catch {
+            if (!window.location.href.includes(rule.urlFilter)) continue;
+          }
+        }
 
         // Check CSS selector scope if defined
         if (rule.selector && textNode.parentElement) {
@@ -112,28 +141,186 @@ import { Rule } from '../types';
     return totalReplacements;
   }
 
-  function startObserver() {
-    if (observer) observer.disconnect();
-    observer = new MutationObserver((mutations) => {
-      if (isProcessing) return;
-      for (const mutation of mutations) {
-        for (const addedNode of Array.from(mutation.addedNodes)) {
-          applyDomReplacements(addedNode, activeRules);
+  // --------------------------------------------------------------------------
+  // [1.5] AGGRESSIVE SECOND PASS FOR DATA ELEMENTS (E-commerce / Tables)
+  // --------------------------------------------------------------------------
+  function replaceInDataElements(rules: Rule[]): number {
+    if (!document.body || rules.length === 0) return 0;
+    let totalReplacements = 0;
+
+    const selectors = [
+      'td[data-label]',
+      'td[data-title]',
+      'td[data-bind]',
+      'span[data-bind]',
+      'div[data-bind]',
+      'td.monetary',
+      'td.price',
+      'span.price',
+      '.cart-items td',
+      'table td'
+    ];
+
+    const elements = document.querySelectorAll(selectors.join(','));
+
+    for (const el of Array.from(elements)) {
+      let text = el.textContent || '';
+      let changed = false;
+
+      for (const rule of rules) {
+        if (!rule.find || !rule.enabled) continue;
+
+        let pattern: RegExp;
+        const flags = rule.caseSensitive ? 'g' : 'gi';
+
+        if (rule.useRegex) {
+          try { pattern = new RegExp(rule.find, flags); } catch { continue; }
+        } else {
+          pattern = new RegExp(escapeRegex(rule.find), flags);
+        }
+
+        const matches = text.match(pattern);
+        if (matches) {
+          totalReplacements += matches.length;
+          text = text.replace(pattern, rule.replace ?? '');
+          changed = true;
         }
       }
+
+      if (changed) {
+        isProcessing = true;
+        if (el.childNodes.length === 1 && el.childNodes[0].nodeType === 3) {
+          el.childNodes[0].nodeValue = text;
+        } else if (el.childNodes.length === 0) {
+          el.textContent = text;
+        } else {
+          const innerWalker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let n: Node | null;
+          while ((n = innerWalker.nextNode())) {
+            let nodeText = n.nodeValue || '';
+            for (const rule of rules) {
+              if (!rule.find || !rule.enabled) continue;
+              let p: RegExp;
+              const f = rule.caseSensitive ? 'g' : 'gi';
+              if (rule.useRegex) {
+                try { p = new RegExp(rule.find, f); } catch { continue; }
+              } else {
+                p = new RegExp(escapeRegex(rule.find), f);
+              }
+              nodeText = nodeText.replace(p, rule.replace ?? '');
+            }
+            n.nodeValue = nodeText;
+          }
+        }
+        isProcessing = false;
+      }
+    }
+
+    return totalReplacements;
+  }
+
+  // --------------------------------------------------------------------------
+  // [2] POLLING & OBSERVER MANAGEMENT
+  // --------------------------------------------------------------------------
+  function startPolling(rules: Rule[], intervalMs = 500) {
+    stopPolling();
+    pollingTimer = window.setInterval(() => {
+      if (document.body && rules.length > 0) {
+        replaceTextInNode(document.body, rules);
+        replaceInDataElements(rules);
+      }
+    }, intervalMs);
+  }
+
+  function stopPolling() {
+    if (pollingTimer !== null) {
+      clearInterval(pollingTimer);
+      pollingTimer = null;
+    }
+  }
+
+  function applyRules(rules: Rule[], observe = true) {
+    activeRules = rules;
+
+    onDomReady(() => {
+      const count = replaceTextInNode(document.body, rules);
+      const dataCount = replaceInDataElements(rules);
+      const totalCount = count + dataCount;
+
+      if (totalCount > 0 && rules[0]?.id) {
+        chrome.runtime.sendMessage({
+          action: 'updateStats',
+          ruleId: rules[0].id,
+          count: totalCount
+        }).catch(() => {});
+      }
+
+      // Progressive burst timer scans (200ms, 500ms, 1s, 2s, 3s, 4s, 5s) for async loads
+      const burstDelays = [200, 500, 1000, 2000, 3000, 4000, 5000];
+      for (const delay of burstDelays) {
+        setTimeout(() => {
+          if (activeRules.length > 0 && document.body) {
+            replaceTextInNode(document.body, activeRules);
+            replaceInDataElements(activeRules);
+          }
+        }, delay);
+      }
+
+      // Debounced MutationObserver
+      if (observe && !activeObserver) {
+        let mutationTimer: number | null = null;
+        activeObserver = new MutationObserver(() => {
+          if (isProcessing) return;
+          if (mutationTimer !== null) clearTimeout(mutationTimer);
+          mutationTimer = window.setTimeout(() => {
+            if (activeRules.length > 0 && document.body) {
+              replaceTextInNode(document.body, activeRules);
+              replaceInDataElements(activeRules);
+            }
+          }, 30);
+        });
+
+        activeObserver.observe(document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
+      }
+
+      // Continuous polling check
+      chrome.storage.local.get(['continuousMode', 'pollingInterval'], (data) => {
+        if (data.continuousMode && rules.length > 0) {
+          startPolling(rules, data.pollingInterval || 500);
+        }
+      });
     });
 
-    if (document.body) {
-      observer.observe(document.body, { childList: true, subtree: true });
-    }
+    chrome.storage.local.get(['vipActive'], (data) => {
+      if (data.vipActive) {
+        syncVipRules(rules, true);
+      }
+    });
+  }
+
+  function quickReplace(find: string, replace: string, options: { useRegex?: boolean; caseSensitive?: boolean; replaceAll?: boolean } = {}) {
+    if (!document.body || !find) return 0;
+    const rule: Rule = {
+      id: 'quick-' + Date.now(),
+      find,
+      replace,
+      useRegex: options.useRegex || false,
+      caseSensitive: options.caseSensitive || false,
+      enabled: true,
+      createdAt: Date.now()
+    };
+    return replaceTextInNode(document.body, [rule]);
   }
 
   function fetchAndApplyRules() {
     chrome.runtime.sendMessage({ action: 'getRules' }, (response) => {
       if (response && Array.isArray(response.rules)) {
         activeRules = response.rules.filter((r: Rule) => r.enabled);
-        applyDomReplacements(document.body, activeRules);
-        startObserver();
+        applyRules(activeRules, true);
       }
     });
 
@@ -146,11 +333,85 @@ import { Rule } from '../types';
     });
   }
 
+  // --------------------------------------------------------------------------
+  // [3] MESSAGE LISTENERS (IPC BRIDGE)
+  // --------------------------------------------------------------------------
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'applyRules') {
       activeRules = message.rules || [];
-      const count = applyDomReplacements(document.body, activeRules);
-      sendResponse({ count });
+      applyRules(activeRules, true);
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'countMatches') {
+      if (!document.body || !message.find) {
+        sendResponse({ count: 0 });
+        return true;
+      }
+      const flags = message.options?.caseSensitive ? 'g' : 'gi';
+      let pattern: RegExp;
+      if (message.options?.useRegex) {
+        try { pattern = new RegExp(message.find, flags); } catch { sendResponse({ count: 0 }); return true; }
+      } else {
+        pattern = new RegExp(escapeRegex(message.find), flags);
+      }
+      const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode: (n) => {
+            const parent = n.parentNode as HTMLElement;
+            if (!parent) return NodeFilter.FILTER_REJECT;
+            const tag = parent.tagName;
+            if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT'].includes(tag)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        }
+      );
+      let total = 0;
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const matches = (node.textContent || '').match(pattern);
+        if (matches) total += matches.length;
+      }
+      sendResponse({ count: total });
+      return true;
+    }
+
+    if (message.action === 'quickReplace') {
+      const count = quickReplace(message.find, message.replace, message.options);
+      sendResponse({ success: true, replacements: count });
+      return true;
+    }
+
+    if (message.action === 'startPolling') {
+      startPolling(activeRules, message.interval || 500);
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'stopPolling') {
+      stopPolling();
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'updateVipRules') {
+      syncVipRules(message.rules || [], message.active || false);
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'stopObserver') {
+      if (activeObserver) {
+        activeObserver.disconnect();
+        activeObserver = null;
+      }
+      stopPolling();
+      sendResponse({ success: true });
       return true;
     }
 
@@ -159,15 +420,24 @@ import { Rule } from '../types';
       sendResponse({ success: true });
       return true;
     }
+
+    if (message.action === 'ping') {
+      sendResponse({ alive: true });
+      return true;
+    }
   });
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      injectMainWorldInterceptor();
-      fetchAndApplyRules();
-    });
-  } else {
-    injectMainWorldInterceptor();
-    fetchAndApplyRules();
-  }
+  // Init Main World interceptor & fetch rules
+  injectMainWorldInterceptor();
+  fetchAndApplyRules();
+
+  // Re-apply on full page load
+  window.addEventListener('load', () => {
+    if (activeRules.length > 0 && document.body) {
+      setTimeout(() => {
+        replaceTextInNode(document.body, activeRules);
+        replaceInDataElements(activeRules);
+      }, 300);
+    }
+  });
 })();

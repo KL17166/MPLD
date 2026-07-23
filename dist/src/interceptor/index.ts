@@ -8,27 +8,25 @@
     useRegex: boolean;
     caseSensitive: boolean;
     enabled: boolean;
+    urlFilter?: string;
   }
 
   let vipRules: VipRuleItem[] = [];
   let vipActive = false;
 
-  function loadStorageRules() {
-    try {
-      const stored = localStorage.getItem('__tm_vip_rules');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && parsed.active && Array.isArray(parsed.rules)) {
-          vipRules = parsed.rules;
-          vipActive = true;
-        }
+  // Sync load from localStorage on 1st script execution (before React/Vue/Angular init)
+  try {
+    const stored = localStorage.getItem('__tm_vip_rules');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && parsed.active && Array.isArray(parsed.rules)) {
+        vipRules = parsed.rules;
+        vipActive = true;
       }
-    } catch {
-      // Ignored
     }
+  } catch {
+    // Ignored
   }
-
-  loadStorageRules();
 
   function escapeRegex(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -65,16 +63,16 @@
 
     if (totalMatches > 0) {
       console.log(
-        `%c🛡️ MPLD VIP%c Interceptou e alterou ${totalMatches} ocorrência(s) de API`,
-        'background: #16a34a; color: #ffffff; padding: 2px 8px; border-radius: 4px; font-weight: bold;',
-        'color: #16a34a;'
+        `%c[MPLD VIP]%c Interceptou e alterou ${totalMatches} ocorrência(s) de API`,
+        'background: linear-gradient(135deg, #f59e0b, #d97706); color: #000; padding: 2px 8px; border-radius: 4px; font-weight: bold;',
+        'color: #f59e0b;'
       );
     }
 
     return result;
   }
 
-  // 1. Hook JSON.parse
+  // 1. Monkey-Patch: JSON.parse
   const origJSONParse = JSON.parse;
   JSON.parse = function (text: string, reviver?: (key: string, value: unknown) => unknown) {
     if (vipActive && vipRules.length > 0 && typeof text === 'string') {
@@ -84,75 +82,125 @@
     return origJSONParse.call(this, text, reviver);
   };
 
-  // 2. Hook Fetch API
-  const origFetch = window.fetch;
-  window.fetch = async function (...args) {
-    const response = await origFetch.apply(this, args);
-    if (!vipActive || vipRules.length === 0) return response;
+  // 2. Monkey-Patch: XMLHttpRequest
+  const XHR = XMLHttpRequest.prototype;
+  const origResponseTextDesc = Object.getOwnPropertyDescriptor(XHR, 'responseText');
+  const origResponseDesc = Object.getOwnPropertyDescriptor(XHR, 'response');
+  const xhrCache = new WeakMap<XMLHttpRequest, { text: string; type: string }>();
 
-    const clone = response.clone();
-    try {
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json') || contentType.includes('text/')) {
-        const originalText = await clone.text();
-        const modifiedText = applyRules(originalText);
+  function getModifiedXhr(xhr: XMLHttpRequest) {
+    if (!vipActive || vipRules.length === 0 || xhr.readyState !== 4) return null;
 
-        if (originalText !== modifiedText) {
-          return new Response(modifiedText, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers
-          });
-        }
-      }
-    } catch {
-      // Fallback to original response on error
-    }
+    let cached = xhrCache.get(xhr);
+    if (cached) return cached;
 
-    return response;
-  };
+    const rt = xhr.responseType;
 
-  // 3. Hook XMLHttpRequest
-  const origXHR = window.XMLHttpRequest.prototype.open;
-  const origSend = window.XMLHttpRequest.prototype.send;
-
-  window.XMLHttpRequest.prototype.open = function (method: string, url: string | URL, ...rest: unknown[]) {
-    (this as unknown as { _tm_url?: string })._tm_url = String(url);
-    // @ts-expect-error Safe signature wrapper
-    return origXHR.apply(this, [method, url, ...rest]);
-  };
-
-  window.XMLHttpRequest.prototype.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
-    if (vipActive && vipRules.length > 0) {
-      this.addEventListener('readystatechange', () => {
-        if (this.readyState === 4 && this.responseText) {
-          try {
-            const modified = applyRules(this.responseText);
-            if (modified !== this.responseText) {
-              Object.defineProperty(this, 'responseText', {
-                writable: true,
-                value: modified
-              });
-              Object.defineProperty(this, 'response', {
-                writable: true,
-                value: modified
-              });
-            }
-          } catch {
-            // Ignored
+    if (!rt || (rt as string) === '' || rt === 'text') {
+      try {
+        const original = origResponseTextDesc?.get?.call(xhr);
+        if (original && typeof original === 'string') {
+          const modified = applyRules(original);
+          if (modified !== original) {
+            cached = { text: modified, type: 'text' };
+            xhrCache.set(xhr, cached);
+            return cached;
           }
         }
-      });
+      } catch {
+        // Ignored
+      }
     }
-    return origSend.call(this, body);
+
+    return null;
+  }
+
+  if (origResponseTextDesc && origResponseTextDesc.get) {
+    Object.defineProperty(XHR, 'responseText', {
+      get: function () {
+        const cached = getModifiedXhr(this);
+        if (cached && cached.type === 'text') return cached.text;
+        return origResponseTextDesc.get!.call(this);
+      },
+      configurable: true,
+      enumerable: true
+    });
+  }
+
+  if (origResponseDesc && origResponseDesc.get) {
+    Object.defineProperty(XHR, 'response', {
+      get: function () {
+        const cached = getModifiedXhr(this);
+        if (cached && cached.type === 'text') return cached.text;
+        return origResponseDesc.get!.call(this);
+      },
+      configurable: true,
+      enumerable: true
+    });
+  }
+
+  // 3. Monkey-Patch: window.fetch
+  const origFetch = window.fetch;
+  window.fetch = function (...args) {
+    const result = origFetch.apply(this, args);
+    if (!vipActive || vipRules.length === 0) return result;
+
+    return result.then(async (response) => {
+      if (!vipActive || vipRules.length === 0) return response;
+
+      const ct = response.headers.get('content-type') || '';
+      const isText = ct.includes('text') || ct.includes('json') ||
+                     ct.includes('javascript') || ct.includes('xml') ||
+                     ct.includes('html') || ct.includes('form');
+
+      if (!isText) return response;
+
+      try {
+        const originalBody = await response.clone().text();
+        const modifiedBody = applyRules(originalBody);
+
+        if (modifiedBody === originalBody) return response;
+
+        const newResponse = new Response(modifiedBody, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers
+        });
+
+        Object.defineProperties(newResponse, {
+          url: { value: response.url },
+          type: { value: response.type },
+          ok: { value: response.ok },
+          redirected: { value: response.redirected }
+        });
+
+        return newResponse;
+      } catch {
+        return response;
+      }
+    }).catch(() => result);
   };
 
-  // Sync update messages from content script
+  // 4. Runtime Message Listener
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
-    if (event.data && event.data.type === '__TM_VIP_SYNC') {
+
+    if (event.data && (event.data.type === '__TM_VIP_SYNC' || event.data.type === '__TM_VIP__')) {
       vipActive = !!event.data.active;
       vipRules = Array.isArray(event.data.rules) ? event.data.rules : [];
+
+      try {
+        if (vipActive && vipRules.length > 0) {
+          localStorage.setItem('__tm_vip_rules', JSON.stringify({ active: true, rules: vipRules }));
+        } else {
+          localStorage.removeItem('__tm_vip_rules');
+        }
+      } catch {
+        // Ignored
+      }
     }
   });
+
+  // @ts-expect-error Global marker
+  window.__textManipulatorVIP = true;
 })();

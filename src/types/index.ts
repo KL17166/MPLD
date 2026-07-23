@@ -9,6 +9,7 @@ export interface Rule {
   enabled: boolean;
   urlFilter?: string; // Glob or substring filter for host/URL
   selector?: string;  // CSS selector scoping (e.g., "p.comment-text", "h1")
+  mode?: 'normal' | 'vip' | 'ultra';
   category?: 'custom' | 'spoiler' | 'currency' | 'mock' | 'security';
   createdAt: number;
 }
@@ -31,21 +32,26 @@ export interface ProxyConfig {
   bypassList: string[];
 }
 
+export interface ExtensionSettings {
+  autoApply: boolean;
+  watchChanges: boolean;
+  continuousMode: boolean;
+  pollingInterval: number;
+  vipActive: boolean;
+  highlightActive: boolean;
+}
+
 export interface StorageData {
   rules: Rule[];
   vipRules: VipRule[];
   vipActive: boolean;
   autoApply: boolean;
+  watchChanges: boolean;
+  continuousMode: boolean;
+  pollingInterval: number;
   highlightActive: boolean;
   proxyConfig: ProxyConfig;
   stats: Record<string, number>;
-  history: Array<{
-    timestamp: number;
-    find: string;
-    replace: string;
-    count: number;
-    url: string;
-  }>;
 }
 
 export type MessageAction =
@@ -60,6 +66,15 @@ export type MessageAction =
   | { action: 'setHighlightStatus'; highlightActive: boolean }
   | { action: 'getStats' }
   | { action: 'updateStats'; ruleId: string; count: number }
+  | { action: 'clearStats' }
+  | { action: 'getSettings' }
+  | { action: 'saveSettings'; settings: Partial<ExtensionSettings> }
+  | { action: 'clearAllData' }
+  | { action: 'activateProxy' }
+  | { action: 'deactivateProxy' }
+  | { action: 'getProxyStatus' }
   | { action: 'getProxyConfig' }
   | { action: 'setProxyConfig'; config: ProxyConfig }
-  | { action: 'toggleHighlight'; active: boolean };
+  | { action: 'toggleHighlight'; active: boolean }
+  | { action: 'updateVipRules'; rules: Rule[]; active: boolean };
+

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Layers,
-  Zap,
   Play,
   RotateCcw,
   Sliders,
@@ -9,14 +8,24 @@ import {
   Eye,
   CheckCircle2,
   BookmarkPlus,
-  ArrowRight
+  ArrowRight,
+  Trash2,
+  History
 } from 'lucide-react';
 import { Rule } from '../types';
+
+interface HistoryItem {
+  find: string;
+  replace: string;
+  count: number;
+  ts: number;
+}
 
 export const PopupApp: React.FC = () => {
   const [currentHost, setCurrentHost] = useState<string>('carregando...');
   const [currentTabId, setCurrentTabId] = useState<number | null>(null);
   const [rules, setRules] = useState<Rule[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [vipActive, setVipActive] = useState<boolean>(false);
   const [highlightActive, setHighlightActive] = useState<boolean>(false);
 
@@ -25,10 +34,10 @@ export const PopupApp: React.FC = () => {
   const [replaceText, setReplaceText] = useState<string>('');
   const [useRegex, setUseRegex] = useState<boolean>(false);
   const [caseSensitive, setCaseSensitive] = useState<boolean>(false);
+  const [matchCount, setMatchCount] = useState<number | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
 
   useEffect(() => {
-    // Get active tab host
     if (typeof chrome !== 'undefined' && chrome.tabs) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs[0] && tabs[0].url) {
@@ -54,37 +63,92 @@ export const PopupApp: React.FC = () => {
       chrome.runtime.sendMessage({ action: 'getHighlightStatus' }, (res) => {
         if (res) setHighlightActive(!!res.highlightActive);
       });
+
+      chrome.storage.local.get(['popupHistory'], (data) => {
+        if (data.popupHistory) setHistory(data.popupHistory);
+      });
+
+      // Sync storage changes to state in real time
+      const storageListener = (changes: { [key: string]: chrome.storage.StorageChange }, area: string) => {
+        if (area === 'local' && changes.rules) {
+          setRules(changes.rules.newValue || []);
+        }
+      };
+
+      chrome.storage.onChanged.addListener(storageListener);
+      return () => chrome.storage.onChanged.removeListener(storageListener);
     }
   }, []);
+
+  // Live match counter on active tab as user types
+  useEffect(() => {
+    if (!findText.trim() || !currentTabId) {
+      setMatchCount(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      chrome.tabs.sendMessage(
+        currentTabId,
+        {
+          action: 'countMatches',
+          find: findText,
+          options: { useRegex, caseSensitive }
+        },
+        (res) => {
+          if (chrome.runtime.lastError) {
+            setMatchCount(null);
+          } else {
+            setMatchCount(res?.count ?? 0);
+          }
+        }
+      );
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [findText, useRegex, caseSensitive, currentTabId]);
+
+  const saveHistory = (find: string, replace: string, count: number) => {
+    const updated = [{ find, replace, count, ts: Date.now() }, ...history.filter((h) => h.find !== find)].slice(0, 10);
+    setHistory(updated);
+    if (typeof chrome !== 'undefined' && chrome.storage) {
+      chrome.storage.local.set({ popupHistory: updated });
+    }
+  };
 
   const handleApplyRules = () => {
     if (!currentTabId) return;
 
-    let targetRules: Rule[] = rules.filter(r => r.enabled);
     if (findText) {
-      const tempRule: Rule = {
-        id: 'temp-' + Date.now(),
-        find: findText,
-        replace: replaceText,
-        useRegex,
-        caseSensitive,
-        enabled: true,
-        createdAt: Date.now()
-      };
-      targetRules = [tempRule, ...targetRules];
+      chrome.tabs.sendMessage(
+        currentTabId,
+        {
+          action: 'quickReplace',
+          find: findText,
+          replace: replaceText,
+          options: { useRegex, caseSensitive }
+        },
+        (res) => {
+          const count = res?.replacements ?? 0;
+          saveHistory(findText, replaceText, count);
+          setStatusMsg({
+            text: `Substituição concluída! (${count} alterações)`,
+            type: 'success'
+          });
+          setTimeout(() => setStatusMsg(null), 3000);
+        }
+      );
+    } else {
+      const activeRules = rules.filter((r) => r.enabled);
+      chrome.tabs.sendMessage(
+        currentTabId,
+        { action: 'applyRules', rules: activeRules },
+        (res) => {
+          setStatusMsg({ text: 'Regras ativas aplicadas!', type: 'success' });
+          setTimeout(() => setStatusMsg(null), 3000);
+        }
+      );
     }
-
-    chrome.tabs.sendMessage(currentTabId, {
-      action: 'applyRules',
-      rules: targetRules
-    }, (res) => {
-      const count = res?.count ?? 0;
-      setStatusMsg({
-        text: `Substituição concluída! (${count} alterações)`,
-        type: 'success'
-      });
-      setTimeout(() => setStatusMsg(null), 3000);
-    });
   };
 
   const handleSaveRule = () => {
@@ -94,25 +158,89 @@ export const PopupApp: React.FC = () => {
       return;
     }
 
-    const newRule: Rule = {
-      id: 'rule-' + Date.now(),
-      name: findText,
-      find: findText,
-      replace: replaceText,
-      useRegex,
-      caseSensitive,
-      enabled: true,
-      createdAt: Date.now()
-    };
+    // Always fetch latest rules from background first to avoid overwriting
+    chrome.runtime.sendMessage({ action: 'getRules' }, (res) => {
+      const currentRules: Rule[] = res?.rules || [];
+      const searchTarget = findText.trim();
+      const existingIndex = currentRules.findIndex(
+        (r) => r.find.trim().toLowerCase() === searchTarget.toLowerCase()
+      );
 
-    const updated = [newRule, ...rules];
-    setRules(updated);
-    chrome.runtime.sendMessage({ action: 'saveRules', rules: updated }, () => {
-      setStatusMsg({ text: 'Regra salva no Painel!', type: 'success' });
-      setFindText('');
-      setReplaceText('');
-      setTimeout(() => setStatusMsg(null), 3000);
+      let updatedRules: Rule[];
+
+      if (existingIndex >= 0) {
+        updatedRules = currentRules.map((r, idx) =>
+          idx === existingIndex
+            ? { ...r, replace: replaceText, useRegex, caseSensitive, enabled: true }
+            : r
+        );
+      } else {
+        const newRule: Rule = {
+          id: 'rule-' + Date.now(),
+          name: searchTarget,
+          find: searchTarget,
+          replace: replaceText,
+          useRegex,
+          caseSensitive,
+          enabled: true,
+          mode: 'normal',
+          createdAt: Date.now()
+        };
+        updatedRules = [newRule, ...currentRules];
+      }
+
+      setRules(updatedRules);
+
+      chrome.runtime.sendMessage({ action: 'saveRules', rules: updatedRules }, () => {
+        setStatusMsg({
+          text: existingIndex >= 0 ? 'Regra atualizada!' : 'Regra salva no Painel!',
+          type: 'success'
+        });
+
+        // Trigger immediate replacement on active tab
+        if (currentTabId) {
+          chrome.tabs.sendMessage(currentTabId, {
+            action: 'applyRules',
+            rules: updatedRules.filter((r) => r.enabled)
+          }).catch(() => {});
+        }
+
+        setFindText('');
+        setReplaceText('');
+        setMatchCount(null);
+        setTimeout(() => setStatusMsg(null), 3000);
+      });
     });
+  };
+
+  const handleToggleRule = (id: string) => {
+    chrome.runtime.sendMessage({ action: 'getRules' }, (res) => {
+      const currentRules: Rule[] = res?.rules || [];
+      const updated = currentRules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r));
+      setRules(updated);
+      chrome.runtime.sendMessage({ action: 'saveRules', rules: updated });
+    });
+  };
+
+  const handleDeleteRule = (id: string) => {
+    chrome.runtime.sendMessage({ action: 'getRules' }, (res) => {
+      const currentRules: Rule[] = res?.rules || [];
+      const updated = currentRules.filter((r) => r.id !== id);
+      setRules(updated);
+      chrome.runtime.sendMessage({ action: 'saveRules', rules: updated });
+    });
+  };
+
+  const handleClearHistory = () => {
+    setHistory([]);
+    if (typeof chrome !== 'undefined' && chrome.storage) {
+      chrome.storage.local.set({ popupHistory: [] });
+    }
+  };
+
+  const handleSelectHistory = (item: HistoryItem) => {
+    setFindText(item.find);
+    setReplaceText(item.replace);
   };
 
   const handleToggleVip = () => {
@@ -137,15 +265,15 @@ export const PopupApp: React.FC = () => {
   };
 
   const handleOpenPanel = () => {
-    if (typeof chrome !== 'undefined' && chrome.runtime) {
-      chrome.runtime.sendMessage({ action: 'openPanel' });
+    if (typeof chrome !== 'undefined' && chrome.tabs) {
+      chrome.tabs.create({ url: chrome.runtime.getURL('src/panel/index.html') });
     }
   };
 
-  const activeRulesCount = rules.filter(r => r.enabled).length;
+  const activeRulesCount = rules.filter((r) => r.enabled).length;
 
   return (
-    <div className="flex flex-col min-h-[480px] bg-slate-950 text-slate-100 p-4 space-y-4 select-none">
+    <div className="flex flex-col min-h-[500px] w-[360px] bg-slate-950 text-slate-100 p-4 space-y-3.5 select-none font-sans">
       {/* Header */}
       <header className="flex items-center justify-between pb-3 border-b border-slate-800">
         <div className="flex items-center space-x-2.5">
@@ -208,9 +336,16 @@ export const PopupApp: React.FC = () => {
       {/* Quick Search & Replace Form */}
       <div className="space-y-2.5 bg-slate-900/40 p-3 rounded-lg border border-slate-800/60">
         <div>
-          <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-            Buscar na Página
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+              Buscar na Página
+            </label>
+            {matchCount !== null && (
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/40">
+                {matchCount} match{matchCount !== 1 ? 'es' : ''}
+              </span>
+            )}
+          </div>
           <input
             type="text"
             value={findText}
@@ -262,14 +397,14 @@ export const PopupApp: React.FC = () => {
             className="flex items-center space-x-1 text-slate-400 hover:text-emerald-400 transition-colors text-xs font-medium"
             title="Salvar como regra permanente no Painel"
           >
-            <BookmarkPlus className="w-3.5 h-3.5" />
+            <BookmarkPlus className="w-3.5 h-3.5 text-emerald-400" />
             <span>Salvar Regra</span>
           </button>
         </div>
       </div>
 
       {/* Primary Actions */}
-      <div className="flex space-x-2 pt-1">
+      <div className="flex space-x-2">
         <button
           onClick={handleApplyRules}
           className="flex-1 flex items-center justify-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs py-2 rounded-md transition-all shadow-sm shadow-emerald-900/20 active:scale-[0.98]"
@@ -303,6 +438,38 @@ export const PopupApp: React.FC = () => {
         </div>
       )}
 
+      {/* History Section */}
+      {history.length > 0 && (
+        <div className="space-y-1.5 border-t border-slate-800/80 pt-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-400 font-semibold uppercase tracking-wider text-[10px] flex items-center space-x-1">
+              <History className="w-3 h-3 text-slate-500" />
+              <span>Histórico Recente</span>
+            </span>
+            <button
+              onClick={handleClearHistory}
+              className="text-[10px] text-slate-500 hover:text-rose-400 transition-colors"
+            >
+              Limpar
+            </button>
+          </div>
+          <div className="flex space-x-1.5 overflow-x-auto pb-1 text-[11px] font-mono scrollbar-none">
+            {history.map((item, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleSelectHistory(item)}
+                className="shrink-0 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded px-2 py-1 text-slate-300 transition-colors"
+                title={`Clique para carregar "${item.find}" → "${item.replace}"`}
+              >
+                <span className="text-emerald-400">{item.find}</span>
+                <span className="text-slate-500 mx-1">→</span>
+                <span className="text-slate-400">{item.replace || '""'}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Active Rules Quick List */}
       <div className="flex-1 flex flex-col pt-2 border-t border-slate-800">
         <div className="flex items-center justify-between text-xs mb-2">
@@ -324,25 +491,35 @@ export const PopupApp: React.FC = () => {
               Nenhuma regra salva no Painel.
             </div>
           ) : (
-            rules.slice(0, 4).map((rule) => (
+            rules.slice(0, 5).map((rule) => (
               <div
                 key={rule.id}
                 className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800/60 hover:border-slate-700 transition-colors"
               >
-                <div className="truncate max-w-[240px]">
+                <div className="truncate max-w-[170px]" title={`${rule.find} → ${rule.replace}`}>
                   <span className="text-emerald-400">{rule.find}</span>
                   <span className="text-slate-500 mx-1">→</span>
                   <span className="text-slate-300">{rule.replace || '""'}</span>
                 </div>
-                <span
-                  className={`text-[9px] px-1 py-0.2 rounded font-sans ${
-                    rule.enabled
-                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
-                      : 'bg-slate-800 text-slate-500'
-                  }`}
-                >
-                  {rule.enabled ? 'ON' : 'OFF'}
-                </span>
+                <div className="flex items-center space-x-1.5 font-sans">
+                  <button
+                    onClick={() => handleToggleRule(rule.id)}
+                    className={`text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                      rule.enabled
+                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700'
+                    }`}
+                  >
+                    {rule.enabled ? 'ON' : 'OFF'}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteRule(rule.id)}
+                    className="text-slate-500 hover:text-rose-400 p-0.5 transition-colors"
+                    title="Excluir regra"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
               </div>
             ))
           )}
